@@ -4,6 +4,7 @@ use std::{
     env,
     io::{self},
     path::{Path, PathBuf},
+    process::Stdio,
 };
 
 use log::info;
@@ -13,8 +14,9 @@ use which::which;
 use crate::config::{ProxyConfig, SparkVersion};
 
 static SPARK_HOME: &str = "SPARK_HOME";
-static TOKEN_CONFIG: &str = "spark.connect.proxy.token";
+static TOKEN_CONFIG: &str = "spark.connect.authenticate.token";
 static CALLBACK_CONFIG: &str = "spark.connect.proxy.callback";
+static TIMEOUT_CONFIG: &str = "spark.connect.proxy.idle.timeout";
 
 #[derive(Clone)]
 pub struct Launcher {
@@ -141,6 +143,7 @@ impl Launcher {
         // Finally add our internal configs
         configs.insert(TOKEN_CONFIG.to_string(), token);
         configs.insert(CALLBACK_CONFIG.to_string(), self.callback_addr.clone());
+        configs.insert(TIMEOUT_CONFIG.to_string(), "60".to_string());
         configs.insert(
             "spark.extraListeners".to_string(),
             "org.apache.spark.sql.connect.proxy.SparkConnectProxyListener".to_string(),
@@ -164,7 +167,7 @@ impl Launcher {
 
         args.extend([
             "--jars".to_string(),
-            "plugin/target/scala-2.13/spark-connect-proxy_2.13-0.1.0-SNAPSHOT.jar".to_string(),
+            "plugin/target/scala-2.13/spark-connect-proxy_2.13-*.jar".to_string(),
         ]);
 
         args.extend([
@@ -172,7 +175,9 @@ impl Launcher {
             "org.apache.spark.sql.connect.service.SparkConnectServer".to_string(),
         ]);
 
-        // args.extend(["--proxy-user".to_string(), username]);
+        if version.proxy_user {
+            args.extend(["--proxy-user".to_string(), username]);
+        }
 
         info!("Running {:?} {}", submit_path, args.join(" "));
 

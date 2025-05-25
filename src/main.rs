@@ -1,27 +1,30 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use std::{fs, io};
 
 use axum::Router;
 use clap::{command, Parser};
-use config::ProxyConfig;
+use config::{KerberosConfig, ProxyConfig};
 use http::header::AUTHORIZATION;
-use http::{response, status, StatusCode};
+use http::StatusCode;
 use hyper::body::Incoming;
 use hyper::service::Service;
 use hyper::{Request, Response};
 
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
-use log::info;
+use log::{debug, error, info};
 use routes::get_router;
 use rustls_pemfile::{certs, private_key};
-use store::{InMemorySessionStore, SessionStore};
+use store::{ApplicationStore, InMemoryApplicationStore};
 use tokio::net::TcpStream;
+use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot};
 use tokio_rustls::TlsAcceptor;
 use tower::Service as TowerService;
+use which::which;
 
 mod auth;
 mod config;
@@ -40,7 +43,9 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::init();
+    env_logger::Builder::new()
+        .filter_level(log::LevelFilter::Info)
+        .init();
 
     let args = Args::parse();
 
@@ -49,14 +54,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(ProxyConfig::from_file)
         .unwrap_or_default();
 
+    if let Some(kerberos_config) = config.kerberos_config.as_ref() {
+        kerberos_creds_task(kerberos_config.clone());
+    }
+
     let bind_host = config.bind_host.clone().unwrap_or("0.0.0.0".to_string());
 
     let bind_port = config.get_bind_port();
 
     let listener = tokio::net::TcpListener::bind(format!("{}:{}", bind_host, bind_port)).await?;
-    println!("Listening on http://{:?}", listener.local_addr().unwrap());
+    info!("Listening on http://{:?}", listener.local_addr().unwrap());
 
-    let session_store = Arc::new(InMemorySessionStore::default());
+    let session_store = Arc::new(InMemoryApplicationStore::default());
     let router = get_router(&config, session_store.clone());
     let tls_acceptor = load_tls_acceptor(&config)?;
 
@@ -77,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .await;
 
                 if let Err(err) = result {
-                    println!("Error serving connection: {:?}", err);
+                    error!("Error serving connection: {:?}", err);
                 }
             });
         } else {
@@ -91,7 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .await;
 
                 if let Err(err) = result {
-                    println!("Error serving connection: {:?}", err);
+                    error!("Error serving connection: {:?}", err);
                 }
             });
         };
@@ -136,37 +145,32 @@ impl UpstreamConnection {
             .await
             .unwrap();
         tokio::task::spawn(async move {
-            println!("Spawned connection await");
+            debug!("Spawned connection await");
             if let Err(err) = conn.await {
-                println!("Connection failed: {:?}", err);
+                error!("Connection failed: {:?}", err);
             }
         });
 
-        loop {
-            if let Some((mut req, tx)) = self.rx.recv().await {
-                let uri_string = format!(
-                    "http://{}{}",
-                    addr,
-                    req.uri()
-                        .path_and_query()
-                        .map(|x| x.as_str())
-                        .unwrap_or("/")
-                );
-                *req.uri_mut() = uri_string.parse().unwrap();
+        while let Some((mut req, tx)) = self.rx.recv().await {
+            let uri_string = format!(
+                "http://{}{}",
+                addr,
+                req.uri()
+                    .path_and_query()
+                    .map(|x| x.as_str())
+                    .unwrap_or("/")
+            );
+            *req.uri_mut() = uri_string.parse().unwrap();
 
-                println!("Proxying request {:?}", req.uri().path_and_query());
+            info!("Proxying request {:?}", req.uri().path_and_query());
 
-                tx.send(
-                    sender
-                        .send_request(req)
-                        .await
-                        .map(|response| response.map(axum::body::Body::new)),
-                )
-                .unwrap();
-            } else {
-                println!("Connection closed, exiting loop");
-                break;
-            }
+            tx.send(
+                sender
+                    .send_request(req)
+                    .await
+                    .map(|response| response.map(axum::body::Body::new)),
+            )
+            .unwrap();
         }
     }
 }
@@ -174,11 +178,11 @@ impl UpstreamConnection {
 struct ProxyService {
     dispatch: Mutex<Option<mpsc::UnboundedSender<UpstreamMessage>>>,
     router: Router,
-    session_store: Arc<dyn SessionStore>,
+    session_store: Arc<dyn ApplicationStore>,
 }
 
 impl ProxyService {
-    fn new(router: Router, session_store: Arc<dyn SessionStore>) -> Self {
+    fn new(router: Router, session_store: Arc<dyn ApplicationStore>) -> Self {
         Self {
             dispatch: Mutex::new(None),
             router,
@@ -217,7 +221,7 @@ impl ProxyService {
                 }
             };
 
-            if let Some(session) = self.session_store.get_session_by_token(token) {
+            if let Some(session) = self.session_store.get_app_by_token(token) {
                 let (upstream_sender, upstream_receiver) = mpsc::unbounded_channel();
                 let upstream = UpstreamConnection {
                     rx: upstream_receiver,
@@ -261,4 +265,31 @@ impl Service<Request<hyper::body::Incoming>> for ProxyService {
             Box::pin(async move { Ok(router.call(req).await.unwrap()) })
         }
     }
+}
+
+fn kerberos_creds_task(kerberos_config: KerberosConfig) {
+    let kinit = which("kinit").expect("Failed to find kinit executable");
+    tokio::spawn(async move {
+        info!("Starting Kerberos credential task");
+
+        loop {
+            let output = Command::new(&kinit)
+                .args([
+                    "-kt",
+                    kerberos_config.keytab.as_ref(),
+                    kerberos_config.principal.as_ref(),
+                ])
+                .output()
+                .await;
+
+            if let Err(error) = output {
+                error!("Failed to kinit: {:?}", error);
+            }
+
+            tokio::time::sleep(Duration::from_secs(
+                kerberos_config.renewal_interval.unwrap_or(3600),
+            ))
+            .await;
+        }
+    });
 }

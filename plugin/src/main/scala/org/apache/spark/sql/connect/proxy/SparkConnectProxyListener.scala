@@ -16,24 +16,23 @@ import java.net.http.HttpClient
 import java.net.http.HttpResponse.BodyHandlers
 import org.apache.spark.SparkException
 import org.apache.spark.SparkConf
+import org.apache.spark.sql.connect.service.SparkListenerConnectServiceEnd
 
 class SparkConnectProxyListener(conf: SparkConf) extends SparkListener with Logging {
 
-  val callbackAddr = {
-    val addr = conf.get(Config.SPARK_CONNECT_PROXY_CALLBACK)
-    assert(addr.isDefined, "No callback address provided")
-    addr.get
-  }
+  val callbackAddr = conf.get(Config.SPARK_CONNECT_PROXY_CALLBACK)
 
-  val token = {
-    val token = conf.get(Config.SPARK_CONNECT_PROXY_TOKEN)
-    assert(token.nonEmpty, "No token provided, can't authenticate requests")
-    token.get
-  }
+  val token = conf.get(Config.SPARK_CONNECT_PROXY_TOKEN)
+
+  lazy val authorizationHeader = s"Bearer $token"
+
+  lazy val client = HttpClient.newHttpClient()
 
   override def onOtherEvent(event: SparkListenerEvent): Unit = {
+    Config.updateLastActive()
+
     event match {
-      case SparkListenerConnectServiceStarted(hostAddress, bindingPort, _, _) =>
+      case SparkListenerConnectServiceStarted(hostAddress, bindingPort, _) =>
         val connectUri = s"$hostAddress:$bindingPort"
 
         logInfo(s"Connect service started on $connectUri")
@@ -41,14 +40,12 @@ class SparkConnectProxyListener(conf: SparkConf) extends SparkListener with Logg
         val request = HttpRequest.newBuilder()
           .uri(URI.create(s"$callbackAddr/callback"))
           .timeout(Duration.of(10, SECONDS))
-          .setHeader("Authorization", s"Bearer $token")
+          .setHeader("Authorization", authorizationHeader)
           .setHeader("Content-type", "application/json")
           .POST(HttpRequest.BodyPublishers.ofString(s"{\"address\": \"$connectUri\"}"))
           .build()
 
         logInfo(s"Sending callback info to ${request.uri()}")
-
-        val client = HttpClient.newHttpClient()
 
         try {
           val response = client.send(request, BodyHandlers.discarding())
@@ -64,7 +61,49 @@ class SparkConnectProxyListener(conf: SparkConf) extends SparkListener with Logg
             SparkConnectService.stop()
           }
         }
+      case _: SparkListenerConnectServiceEnd =>
+        val request = HttpRequest.newBuilder()
+          .uri(URI.create(s"$callbackAddr/callback"))
+          .timeout(Duration.of(10, SECONDS))
+          .setHeader("Authorization", authorizationHeader)
+          .setHeader("Content-type", "application/json")
+          .DELETE()
+          .build()
+
+        logInfo(s"Sending callback delete to ${request.uri()}")
+
+        try {
+          val response = client.send(request, BodyHandlers.discarding())
+
+          if (response.statusCode() != 200) {
+            logError(s"Bad status code returned from proxy server: ${response.statusCode()}")
+          }
+        }
+        catch {
+          case e: Throwable => {
+            logError(s"Failed to send connect address to callback", e)
+          }
+        }
       case _ => ()
     }
+  }
+
+
+  val timeoutThread = conf.get(Config.SPARK_CONNECT_PROXY_IDLE_TIMEOUT).map { timeout =>
+    val timeoutThread = new Thread(new Runnable() {
+      override def run(): Unit = {
+        while (true) {
+          if (Config.lastActive < (System.currentTimeMillis() - timeout * 1000)) {
+            SparkConnectService.stop()
+            return
+          }
+
+          Thread.sleep(60000)
+        }
+      }
+    })
+    timeoutThread.setDaemon(true)
+    timeoutThread.start()
+    timeoutThread
   }
 }

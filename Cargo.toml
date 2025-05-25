@@ -6,7 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-axum = "0.7"
+axum = "0.8"
+base64 = { version = "0.22.1", optional = true }
 clap = { version = "4", features = ["derive"] }
 env_logger = "0.11"
 figment = { version = "0.10", features = ["json"] }
@@ -18,13 +19,21 @@ hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
 local-ip-address = "0.6"
 log = "0.4"
-rustls = "0.22"
+rustls = "0.23"
 rustls-pemfile = "2"
 rustls-pki-types = "1"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
-tokio-rustls = "0.25"
-tower = "0.4"
-tower-http = { version = "0.5", features = ["auth"] }
+tokio-rustls = "0.26"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["auth"] }
 uuid = { version = "1", features = ["v4"] }
-which = "6"
+which = "7"
+whoami = "1.5.2"
+
+[target.'cfg(linux)'.dependencies]
+pam = { version = "0.8.0", optional = true }
+
+[features]
+default = []
+pam = ["dep:pam", "dep:base64"]

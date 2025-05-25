@@ -16,10 +16,18 @@ pub struct SparkVersion {
     // SPARK_HOME directory for this version
     pub home: String,
     pub default: bool,
+    pub proxy_user: bool,
     pub env: Option<HashMap<String, String>>,
     pub default_configs: Option<HashMap<String, String>>,
     pub merge_configs: Option<HashMap<String, String>>,
     pub override_configs: Option<HashMap<String, String>>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+pub struct KerberosConfig {
+    pub keytab: String,
+    pub principal: String,
+    pub renewal_interval: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -28,13 +36,21 @@ pub struct TlsConfig {
     pub cert: String,
 }
 
+#[derive(Deserialize)]
+pub struct AuthConfig {
+    pub name: String,
+    pub options: Option<HashMap<String, String>>,
+}
+
 #[derive(Deserialize, Default)]
 pub struct ProxyConfig {
     pub bind_host: Option<String>,
     pub bind_port: Option<u16>,
     pub callback_address: Option<String>,
+    pub kerberos_config: Option<KerberosConfig>,
     pub tls: Option<TlsConfig>,
     pub spark_versions: Vec<SparkVersion>,
+    pub auth_methods: Option<Vec<AuthConfig>>,
 }
 
 impl ProxyConfig {
@@ -60,8 +76,4 @@ impl ProxyConfig {
             )
         })
     }
-
-    // pub fn spark_versions(&self) -> Vec<SparkVersion> {
-    //     self.config.get_table(key)
-    // }
 }
