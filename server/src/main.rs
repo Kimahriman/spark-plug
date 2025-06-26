@@ -70,7 +70,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tls_acceptor = load_tls_acceptor(&config)?;
 
     loop {
-        let (stream, _) = listener.accept().await.unwrap();
+        let (stream, _) = tokio::select! {
+            s = listener.accept() => s.unwrap(),
+            _ = tokio::signal::ctrl_c() => return Ok(())
+        };
 
         info!("Serving new connection");
         let router = router.clone();

@@ -3,12 +3,12 @@ name = "spark-connect-proxy"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 
 [dependency-groups]
 dev = [
     "mypy>=1.15.0",
-    "pyspark",
+    "pyspark>=4.0.0",
     "ruff>=0.9.7",
 ]
 

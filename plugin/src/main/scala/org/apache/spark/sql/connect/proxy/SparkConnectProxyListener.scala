@@ -17,12 +17,13 @@ import java.net.http.HttpResponse.BodyHandlers
 import org.apache.spark.SparkException
 import org.apache.spark.SparkConf
 import org.apache.spark.sql.connect.service.SparkListenerConnectServiceEnd
+import org.apache.spark.sql.connect.config.Connect
 
 class SparkConnectProxyListener(conf: SparkConf) extends SparkListener with Logging {
 
   val callbackAddr = conf.get(Config.SPARK_CONNECT_PROXY_CALLBACK)
 
-  val token = conf.get(Config.SPARK_CONNECT_PROXY_TOKEN)
+  val token = conf.get("spark.connect.authenticate.token")
 
   lazy val authorizationHeader = s"Bearer $token"
 

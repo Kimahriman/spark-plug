@@ -3,12 +3,8 @@ name = "spark-connect-proxy-client"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
-    "grpcio>=1.70.0",
-    "grpcio-status>=1.70.0",
-    "pandas>=2",
-    "pyarrow>=19.0.1",
     "pyspark-client>=4.0.0",
     "requests>=2",
 ]

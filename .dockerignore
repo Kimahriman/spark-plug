@@ -1,9 +1,9 @@
-target/
-.bloop/
+**/target/
+**/.bloop/
 .bsp/
 .metals/
 .venv/
 .vscode/
 
-metals.sbt
+**/metals.sbt
 __pycache__

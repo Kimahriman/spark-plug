@@ -13,14 +13,6 @@ object Config {
   }
 
   // The auth token that must be used by the client to connect
-  val SPARK_CONNECT_PROXY_TOKEN =
-    ConfigBuilder("spark.connect.authenticate.token")
-      .stringConf
-      .createWithDefaultFunction { () =>
-        throw new IllegalArgumentException("Proxy token must be provided")
-      }
-
-  // The auth token that must be used by the client to connect
   val SPARK_CONNECT_PROXY_CALLBACK =
     ConfigBuilder("spark.connect.proxy.callback")
       .stringConf
