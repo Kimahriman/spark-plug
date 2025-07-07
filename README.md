@@ -22,14 +22,14 @@ sequenceDiagram
     participant Driver
 
     User->>Proxy: Create session API request
-    Proxy->>ResourceManager: `spark-submit`
+    Proxy->>ResourceManager: spark-submit
     Proxy->>User: Session launching
     ResourceManager->>Driver: Spark application launched
-    Driver->>Proxy: Callback with token `abc`
+    Driver->>Proxy: Callback with token abc
     User->>Proxy: Session info API request
-    Proxy->>User: Session token `abc`
-    User<<->>Proxy: Create Spark remote session with `token=abc`
-    Proxy<<->>Driver: Proxy gRPC messages
+    Proxy->>User: Session token abc
+    User<<->>Proxy: Create Spark remote session with token=abc
+    User<<->>Proxy<<->>Driver: Proxy gRPC messages
 ```
 
 The functionality is still evolving. Goals of the project include:
