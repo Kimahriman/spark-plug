@@ -29,7 +29,7 @@ sequenceDiagram
     User->>Proxy: Session info API request
     Proxy->>User: Session token abc
     User<<->>Proxy: Create Spark remote session with token=abc
-    User<<->>Proxy<<->>Driver: Proxy gRPC messages
+    Proxy<<->>Driver: Proxy gRPC messages
 ```
 
 The functionality is still evolving. Goals of the project include:
