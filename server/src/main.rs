@@ -28,6 +28,7 @@ use which::which;
 
 mod auth;
 mod config;
+mod error;
 mod launcher;
 mod routes;
 mod store;
@@ -66,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Listening on http://{:?}", listener.local_addr().unwrap());
 
     let session_store = Arc::new(InMemoryApplicationStore::default());
-    let router = get_router(&config, session_store.clone());
+    let router = get_router(&config, session_store.clone()).await;
     let tls_acceptor = load_tls_acceptor(&config)?;
 
     loop {

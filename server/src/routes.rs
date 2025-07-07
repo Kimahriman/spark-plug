@@ -19,7 +19,7 @@ use crate::{
     store::{Application, ApplicationStore},
 };
 
-pub fn get_router(config: &ProxyConfig, app_store: Arc<dyn ApplicationStore>) -> Router {
+pub async fn get_router(config: &ProxyConfig, app_store: Arc<dyn ApplicationStore>) -> Router {
     let app_state = AppStateDyn {
         app_store,
         launcher: Arc::new(Launcher::from_config(config)),
@@ -30,7 +30,9 @@ pub fn get_router(config: &ProxyConfig, app_store: Arc<dyn ApplicationStore>) ->
         .route("/apps/{app_id}", get(get_app).delete(delete_app))
         .route("/versions", get(list_versions))
         .route_layer(
-            ServiceBuilder::new().layer(AsyncRequireAuthorizationLayer::new(UserAuth::new(config))),
+            ServiceBuilder::new().layer(AsyncRequireAuthorizationLayer::new(
+                UserAuth::new(config).await,
+            )),
         )
         .with_state(app_state.clone());
 

@@ -1,9 +1,13 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, fs, sync::Arc};
 
+use anyhow::Result;
 use axum::response::IntoResponse;
 use futures_util::future::BoxFuture;
 use http::{header::AUTHORIZATION, HeaderMap, Request, Response, StatusCode};
-use log::info;
+use jsonwebtoken::{decode, decode_header, DecodingKey, TokenData, Validation};
+use jwks::Jwks;
+use log::{info, warn};
+use serde::{Deserialize, Serialize};
 use tower_http::auth::AsyncAuthorizeRequest;
 
 use crate::config::ProxyConfig;
@@ -14,23 +18,32 @@ pub struct UserId(pub String);
 #[derive(Clone)]
 pub struct BearerToken(pub String);
 
+fn extract_bearer_token(header_map: &HeaderMap) -> Result<Option<&str>> {
+    Ok(header_map
+        .get("Authorization")
+        .map(|h| h.to_str())
+        .transpose()?
+        .filter(|h| h.starts_with("Bearer "))
+        .map(|h| (&h[7..])))
+}
+
 trait UserAuthMethod: Sync + Send {
-    fn authorize_user(&self, header_map: &HeaderMap) -> Option<String>;
+    fn authorize_user(&self, header_map: &HeaderMap) -> Result<Option<String>>;
 }
 
 struct CurrentUserAuth {}
 
 impl UserAuthMethod for CurrentUserAuth {
-    fn authorize_user(&self, _: &HeaderMap) -> Option<String> {
-        Some(whoami::username())
+    fn authorize_user(&self, _: &HeaderMap) -> Result<Option<String>> {
+        Ok(Some(whoami::username()))
     }
 }
 
-/**
- * Authenticate users by simply checking a specific header for their username.
- * This assumes the user has already been authenticated by an upstream proxy
- * which is simply passing their username along.
- */
+///
+/// Authenticate users by simply checking a specific header for their username.
+/// This assumes the user has already been authenticated by an upstream proxy
+/// which is simply passing their username along.
+///
 struct RemoteUserAuth {
     header: String,
 }
@@ -48,33 +61,144 @@ impl RemoteUserAuth {
 }
 
 impl UserAuthMethod for RemoteUserAuth {
-    fn authorize_user(&self, header_map: &HeaderMap) -> Option<String> {
-        header_map
+    fn authorize_user(&self, header_map: &HeaderMap) -> Result<Option<String>> {
+        Ok(header_map
             .get(&self.header)
-            .and_then(|h| h.to_str().ok().map(|v| v.to_string()))
+            .and_then(|h| h.to_str().ok().map(|v| v.to_string())))
     }
 }
 
-#[cfg(feature = "pam")]
-struct PamAuth {}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct JWTClaims {
+    sub: String,
+}
 
-#[cfg(feature = "pam")]
-impl UserAuthMethod for PamAuth {
-    fn authorize_user(&self, auth_header: &str) -> Option<String> {
-        if !auth_header.starts_with("Basic ") {
-            return None;
+struct JWTAuth {
+    key: DecodingKey,
+    validation: Validation,
+}
+
+impl JWTAuth {
+    fn create(options: &HashMap<String, String>) -> Self {
+        let pem = options.get("pem");
+        let pem_file = options.get("pem_file");
+
+        let pem_content = match (pem, pem_file) {
+            (Some(_), Some(_)) => panic!("pem and pem_file cannot both be defined"),
+            (Some(pem), None) => pem.to_string(),
+            (None, Some(pem_file)) => {
+                fs::read_to_string(pem_file).expect("Failed to read pem content from {pem_file}")
+            }
+            (None, None) => panic!("One of pem or pem_file must be defined for JWT auth"),
+        };
+
+        let key = match options.get("pem_type").map(String::as_ref).unwrap_or("rsa") {
+            "rsa" => {
+                DecodingKey::from_rsa_pem(pem_content.as_bytes()).expect("Failed to load RSA pem")
+            }
+            "ec" => {
+                DecodingKey::from_ec_pem(pem_content.as_bytes()).expect("Failed to load EC pem")
+            }
+            "ed" => {
+                DecodingKey::from_ed_pem(pem_content.as_bytes()).expect("Failed to load ED pem")
+            }
+            t => panic!("Unknown PEM type {t}"),
+        };
+
+        Self {
+            key,
+            validation: Validation::default(),
         }
-        let encoded = &auth_header[6..];
-        let decoded = String::from_utf8(BASE64_STANDARD.decode(encoded).unwrap()).unwrap();
-        let (username, password) = decoded.split_once(":").unwrap();
-
-        let mut client = pam::Client::with_password("system-auth").unwrap();
-        client
-            .conversation_mut()
-            .set_credentials(username, password);
-        client.authenticate().map(|_| username)
     }
 }
+
+impl UserAuthMethod for JWTAuth {
+    fn authorize_user(&self, header_map: &HeaderMap) -> Result<Option<String>> {
+        if let Some(token) = extract_bearer_token(header_map)? {
+            let decoded_token: TokenData<JWTClaims> = decode(token, &self.key, &self.validation)?;
+            Ok(Some(decoded_token.claims.sub))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+struct JWKSAuth {
+    jwks: Jwks,
+}
+
+impl JWKSAuth {
+    async fn create(options: &HashMap<String, String>) -> Self {
+        let jwks = match (options.get("jwks_url"), options.get("oidc_url")) {
+            (Some(_), Some(_)) => panic!("JWKS and OIDC URL cannot both be specified"),
+            (Some(jwks_url), None) => Jwks::from_jwks_url(jwks_url)
+                .await
+                .expect("Failed to load JWKS info from {jwks_url}"),
+            (None, Some(oidc_url)) => Jwks::from_oidc_url(oidc_url)
+                .await
+                .expect("Failed to load OIDC info from {oidc_url}"),
+            (None, None) => panic!("Either jwks_url or oidc_url must be provided"),
+        };
+
+        Self { jwks }
+    }
+}
+
+impl UserAuthMethod for JWKSAuth {
+    fn authorize_user(&self, header_map: &HeaderMap) -> Result<Option<String>> {
+        if let Some(token) = extract_bearer_token(header_map)? {
+            let header = decode_header(token)?;
+            let kid = header
+                .kid
+                .as_ref()
+                .ok_or(crate::error::Error::AuthorizationError(
+                    "jwt header should have a kid".to_string(),
+                ))?;
+
+            let jwk = self
+                .jwks
+                .keys
+                .get(kid)
+                .ok_or(crate::error::Error::AuthorizationError(
+                    "jwt refer to a unknown key id".to_string(),
+                ))?;
+
+            let validation = Validation::default();
+            let decoded_token: TokenData<JWTClaims> =
+                decode::<JWTClaims>(token, &jwk.decoding_key, &validation)?;
+            Ok(Some(decoded_token.claims.sub))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+// struct PamAuth {
+//     lib: PAM,
+// }
+
+// impl UserAuthMethod for PamAuth {
+//     fn authorize_user(&self, header_map: &HeaderMap) -> Option<String> {
+//         let auth_header = header_map
+//             .get("Authorization")
+//             .unwrap()
+//             .to_str()
+//             .ok()
+//             .unwrap();
+//         if !auth_header.starts_with("Basic ") {
+//             return None;
+//         }
+//         let encoded = &auth_header[6..];
+//         let decoded = String::from_utf8(BASE64_STANDARD.decode(encoded).unwrap()).unwrap();
+//         let (username, password) = decoded.split_once(":").unwrap();
+
+//         let mut client = pam::Client::with_password("system-auth").unwrap();
+//         client
+//             .conversation_mut()
+//             .set_credentials(username, password);
+//         client.authenticate().map(|_| username.to_string()).ok()
+//     }
+// }
 
 #[derive(Clone)]
 pub struct UserAuth {
@@ -83,18 +207,19 @@ pub struct UserAuth {
 
 impl UserAuth {
     #[allow(clippy::vec_init_then_push)]
-    pub(crate) fn new(config: &ProxyConfig) -> Self {
+    pub(crate) async fn new(config: &ProxyConfig) -> Self {
         let mut auth_methods = Vec::<Arc<dyn UserAuthMethod>>::new();
 
         let default_options = HashMap::new();
         if let Some(auth_configs) = &config.auth_methods {
             for auth_config in auth_configs {
+                let auth_options = auth_config.options.as_ref().unwrap_or(&default_options);
                 match auth_config.name.as_ref() {
-                    "remote_user" => auth_methods.push(Arc::new(RemoteUserAuth::create(
-                        auth_config.options.as_ref().unwrap_or(&default_options),
-                    ))),
-                    #[cfg(feature = "pam")]
-                    "pam" => auth_methods.push(Arc::new(PamAuth {})),
+                    "remote_user" => {
+                        auth_methods.push(Arc::new(RemoteUserAuth::create(auth_options)))
+                    }
+                    "jwt" => auth_methods.push(Arc::new(JWTAuth::create(auth_options))),
+                    "jwks" => auth_methods.push(Arc::new(JWKSAuth::create(auth_options).await)),
                     name => panic!("Unknown authentication method: {}", name),
                 }
             }
@@ -119,8 +244,13 @@ impl AsyncAuthorizeRequest<axum::body::Body> for UserAuth {
         Box::pin(async move {
             let mut username: Option<String> = None;
             for auth_method in auth_methods.iter() {
-                if let Some(user) = auth_method.authorize_user(request.headers()) {
-                    username = Some(user);
+                match auth_method.authorize_user(request.headers()) {
+                    Ok(Some(user)) => {
+                        username = Some(user);
+                        break;
+                    }
+                    Err(e) => warn!("Error trying to authorize user: {:?}", e),
+                    _ => (),
                 }
             }
 

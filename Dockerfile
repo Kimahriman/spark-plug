@@ -24,9 +24,9 @@ RUN --mount=type=cache,target=/root/.cache/coursier \
     --mount=type=cache,target=/root/.sbt \
     /opt/sbt/bin/sbt package
 
-FROM debian:bookworm-slim AS base
+FROM cgr.dev/chainguard/wolfi-base AS base
 
-RUN apt-get update && apt-get install -y wget openjdk-17-jre-headless
+RUN apk add openjdk-17-jre wget
 
 WORKDIR /opt/spark-connect-proxy
 
