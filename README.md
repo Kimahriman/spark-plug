@@ -58,3 +58,37 @@ The plugin provides the special logic in the Spark driver that allows the proxy 
 
 ### Clients
 Currently a simple Python client is implemented that simplifies the steps listed above for creating a new Session. It also implements a custom client interceptor that allows for using a token with non-TLS secured sessions, which is not possible with the current PySpark client. Other clients may be implemented in the future, but they are simple to recreate in any language that has existing Spark Connect client support.
+
+## Building
+
+### Build the Spark plugin
+The Spark plugin is built using [SBT](https://www.scala-sbt.org/download/) and requires Java 17+.
+
+```bash
+sbt package
+```
+
+### Run the server locally
+[Install Rust](https://www.rust-lang.org/tools/install)
+
+```bash
+cargo run
+```
+
+### Build the release binary
+```bash
+cargo build --release
+```
+
+### Docker image
+To build the Docker image with the server and plugin built-in:
+
+```bash
+docker build -t spark-connect-proxy .
+```
+
+This includes a version of Spark. To build a Sparkless image to add your own Spark version (or multiple Spark versions):
+
+```bash
+docker build -t spark-connect-proxy --target base .
+```
