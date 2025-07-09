@@ -27,27 +27,18 @@ pub struct Launcher {
 
 impl Launcher {
     pub fn from_config(config: &ProxyConfig) -> Self {
-        let versions = config.spark_versions.clone();
-        let callback_addr = config.get_callback_addr();
-
-        if versions.is_empty() {
+        let versions = config.spark_versions.clone().unwrap_or_else(|| {
             // Check if SPARK_HOME is defined and use that as the default
             if let Ok(home) = env::var(SPARK_HOME) {
-                let versions = vec![SparkVersion {
+                vec![SparkVersion {
                     name: "default".to_string(),
                     home,
                     default: true,
                     ..Default::default()
-                }];
-                return Self {
-                    versions,
-                    callback_addr,
-                };
-            }
-
-            // Otherwise check if there is a `spark-submit` on the path and infer the home dir
-            if let Ok(submit_path) = which("spark-submit") {
-                let versions = vec![SparkVersion {
+                }]
+            } else if let Ok(submit_path) = which("spark-submit") {
+                // Otherwise check if there is a `spark-submit` on the path and infer the home dir
+                vec![SparkVersion {
                     name: "default".to_string(),
                     home: submit_path
                         .parent()
@@ -58,15 +49,13 @@ impl Launcher {
                         .to_string(),
                     default: true,
                     ..Default::default()
-                }];
-                return Self {
-                    versions,
-                    callback_addr,
-                };
+                }]
+            } else {
+                panic!("Unable to find a default Spark installation")
             }
-
-            panic!("Unable to find a default Spark installation")
-        }
+        });
+        let callback_addr = config.get_callback_addr();
+        info!("Using callback address {callback_addr}");
 
         // Check there is exactly one default
         assert_eq!(
@@ -108,7 +97,7 @@ impl Launcher {
                 .find(|v| v.name == name)
                 .ok_or(io::Error::new(
                     io::ErrorKind::NotFound,
-                    format!("Version named {} not found", name),
+                    format!("Version named {name} not found"),
                 ))?
         } else {
             self.versions
@@ -130,7 +119,7 @@ impl Launcher {
         if let Some(merge_configs) = version.merge_configs.as_ref() {
             for (key, value) in merge_configs.iter() {
                 if let Some(existing) = configs.get(key) {
-                    configs.insert(key.to_string(), format!("{},{}", existing, value));
+                    configs.insert(key.to_string(), format!("{existing},{value}"));
                 }
             }
         }
@@ -162,7 +151,7 @@ impl Launcher {
         let mut args = vec!["--master".to_string(), "local".to_string()];
 
         for (key, value) in configs.iter() {
-            args.extend(["--conf".to_string(), format!("{}={}", key, value)]);
+            args.extend(["--conf".to_string(), format!("{key}={value}")]);
         }
 
         args.extend([

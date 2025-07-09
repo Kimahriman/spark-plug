@@ -12,13 +12,12 @@ use http::StatusCode;
 use hyper::body::Incoming;
 use hyper::service::Service;
 use hyper::{Request, Response};
-
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
 use log::{debug, error, info};
 use routes::get_router;
 use rustls_pemfile::{certs, private_key};
-use store::{ApplicationStore, InMemoryApplicationStore};
+use store::ApplicationStore;
 use tokio::net::TcpStream;
 use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot};
@@ -30,7 +29,9 @@ mod auth;
 mod config;
 mod error;
 mod launcher;
+mod models;
 mod routes;
+mod schema;
 mod store;
 
 /// Start the Spark Connect Proxy server
@@ -50,7 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args = Args::parse();
 
-    let config = args
+    let mut config = args
         .config_file
         .map(ProxyConfig::from_file)
         .unwrap_or_default();
@@ -63,12 +64,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let bind_port = config.get_bind_port();
 
-    let listener = tokio::net::TcpListener::bind(format!("{}:{}", bind_host, bind_port)).await?;
-    info!("Listening on http://{:?}", listener.local_addr().unwrap());
+    let listener = tokio::net::TcpListener::bind(format!("{bind_host}:{bind_port}")).await?;
 
-    let session_store = Arc::new(InMemoryApplicationStore::default());
+    let session_store = config.store.take().unwrap_or_default().get_store().await;
     let router = get_router(&config, session_store.clone()).await;
     let tls_acceptor = load_tls_acceptor(&config)?;
+
+    info!("Listening on http://{:?}", listener.local_addr().unwrap());
 
     loop {
         let (stream, _) = tokio::select! {
@@ -90,7 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .await;
 
                 if let Err(err) = result {
-                    error!("Error serving connection: {:?}", err);
+                    error!("Error serving connection: {err:?}");
                 }
             });
         } else {
@@ -104,7 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .await;
 
                 if let Err(err) = result {
-                    error!("Error serving connection: {:?}", err);
+                    error!("Error serving connection: {err:?}");
                 }
             });
         };
@@ -151,7 +153,7 @@ impl UpstreamConnection {
         tokio::task::spawn(async move {
             debug!("Spawned connection await");
             if let Err(err) = conn.await {
-                error!("Connection failed: {:?}", err);
+                error!("Connection failed: {err:?}");
             }
         });
 
@@ -225,7 +227,10 @@ impl ProxyService {
                 }
             };
 
-            if let Some(session) = self.session_store.get_app_by_token(token) {
+            // TODO: figure out how to not need block_on here
+            if let Some(session) =
+                futures::executor::block_on(self.session_store.get_app_by_token(token.to_string()))
+            {
                 let (upstream_sender, upstream_receiver) = mpsc::unbounded_channel();
                 let upstream = UpstreamConnection {
                     rx: upstream_receiver,
@@ -257,13 +262,14 @@ impl Service<Request<hyper::body::Incoming>> for ProxyService {
         Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
 
     fn call(&self, req: Request<hyper::body::Incoming>) -> Self::Future {
+        info!("Handling call for {}", req.uri());
         if req
             .uri()
             .path()
             .starts_with("/spark.connect.SparkConnectService")
         {
             let rx = self.dispatch(req);
-            Box::pin(async { Ok(rx.await.unwrap()?.map(axum::body::Body::new)) })
+            Box::pin(async move { Ok(rx.await.unwrap()?.map(axum::body::Body::new)) })
         } else {
             let mut router = self.router.clone();
             Box::pin(async move { Ok(router.call(req).await.unwrap()) })
@@ -287,7 +293,7 @@ fn kerberos_creds_task(kerberos_config: KerberosConfig) {
                 .await;
 
             if let Err(error) = output {
-                error!("Failed to kinit: {:?}", error);
+                error!("Failed to kinit: {error:?}");
             }
 
             tokio::time::sleep(Duration::from_secs(

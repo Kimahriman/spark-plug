@@ -16,7 +16,8 @@ use crate::{
     auth::{BearerToken, TokenAuth, UserAuth, UserId},
     config::ProxyConfig,
     launcher::Launcher,
-    store::{Application, ApplicationStore},
+    models::Application,
+    store::ApplicationStore,
 };
 
 pub async fn get_router(config: &ProxyConfig, app_store: Arc<dyn ApplicationStore>) -> Router {
@@ -59,7 +60,7 @@ struct CreateApplicationRequest {
 
 #[derive(Serialize)]
 struct ApplicationInfo {
-    id: u64,
+    id: i32,
     token: String,
     active: bool,
 }
@@ -70,7 +71,10 @@ async fn create_app(
     Json(params): Json<CreateApplicationRequest>,
 ) -> Result<Json<ApplicationInfo>, StatusCode> {
     let token = Uuid::new_v4().to_string();
-    let app = state.app_store.create_app(&user.0, token.clone());
+    let app = state
+        .app_store
+        .create_app(user.0.clone(), token.clone())
+        .await;
 
     state
         .launcher
@@ -82,7 +86,7 @@ async fn create_app(
         )
         .await
         .map_err(|e| {
-            warn!("{:?}", e);
+            warn!("{e:?}");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
@@ -95,12 +99,13 @@ async fn create_app(
 
 async fn get_app(
     State(state): State<AppStateDyn>,
-    Path(app_id): Path<u64>,
+    Path(app_id): Path<i32>,
     Extension(user): Extension<UserId>,
 ) -> Result<Json<ApplicationInfo>, StatusCode> {
     let app = state
         .app_store
-        .get_app(&user.0, app_id)
+        .get_app(user.0, app_id)
+        .await
         .ok_or(StatusCode::NOT_FOUND)?;
 
     Ok(Json(ApplicationInfo {
@@ -114,15 +119,15 @@ async fn list_apps(
     State(state): State<AppStateDyn>,
     Extension(user): Extension<UserId>,
 ) -> Json<Vec<Application>> {
-    Json(state.app_store.list_apps(&user.0))
+    Json(state.app_store.list_apps(user.0).await)
 }
 
 async fn delete_app(
     State(state): State<AppStateDyn>,
-    Path(app_id): Path<u64>,
+    Path(app_id): Path<i32>,
     Extension(user): Extension<UserId>,
 ) {
-    state.app_store.delete_app(&user.0, app_id);
+    state.app_store.delete_app(user.0, app_id).await;
 }
 
 async fn list_versions(State(state): State<AppStateDyn>) -> Json<Vec<String>> {
@@ -142,7 +147,8 @@ async fn app_callback(
     info!("Got the callback for {}", token.0);
     state
         .app_store
-        .set_app_addr(token.0.as_ref(), Some(params.address));
+        .set_app_addr(token.0, Some(params.address))
+        .await;
     Ok(())
 }
 
@@ -151,6 +157,6 @@ async fn app_callback_delete(
     Extension(token): Extension<BearerToken>,
 ) -> Result<(), StatusCode> {
     info!("Got the delete callback for {}", token.0);
-    state.app_store.set_app_addr(token.0.as_ref(), None);
+    state.app_store.set_app_addr(token.0, None).await;
     Ok(())
 }
