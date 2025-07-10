@@ -6,15 +6,13 @@ services:
       context: .
     volumes:
       - .:/usr/src/app
+    ports:
+      - 8100:8100
 
-#   db:
-#     image: postgres:13
-#     environment:
-#       POSTGRES_DB: mydatabase
-#       POSTGRES_USER: myuser
-#       POSTGRES_PASSWORD: mypassword
-#     volumes:
-#       - db_data:/var/lib/postgresql/data
-
-# volumes:
-#   db_data:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - 5432:5432

@@ -11,9 +11,6 @@ async-trait = "0.1"
 axum = "0.8"
 base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
-diesel = { version = "2", features = ["postgres", "sqlite", "returning_clauses_for_sqlite_3_35"] }
-deadpool-diesel = { version = "0.6.1", features = ["postgres", "sqlite"] }
-diesel_migrations = { version = "2.2.0", features = ["postgres", "sqlite"] }
 dotenvy = "0.15"
 env_logger = "0.11"
 figment = { version = "0.10", features = ["json", "yaml"] }
@@ -28,13 +25,12 @@ jsonwebtoken = "9"
 jwks = "0.4"
 local-ip-address = "0.6"
 log = "0.4"
-openssl-sys = { version = "0.9", features = ["vendored"] } 
-pq-sys = { version = "0.7", features = ["bundled"] }
 rustls = "0.23"
 rustls-pemfile = "2"
 rustls-pki-types = "1"
+sea-orm = { version = "1", features = ["sqlx-all", "sqlite-use-returning-for-3_35", "runtime-tokio-rustls"] }
+sea-orm-migration = { version = "1.1.13", features = ["runtime-tokio-rustls", "sqlx-postgres", "sqlx-mysql", "sqlx-sqlite"] }
 serde = { version = "1", features = ["derive"] }
-libsqlite3-sys = { version = "0.30", features = ["bundled"] }
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tokio-rustls = "0.26"
@@ -43,3 +39,5 @@ tower-http = { version = "0.6", features = ["auth"] }
 uuid = { version = "1", features = ["v4"] }
 which = "7"
 whoami = "1"
+
+migration = { path = "./migration" }

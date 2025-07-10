@@ -1,1 +1,2 @@
 callback_address: http://127.0.0.1:8100
+store: postgres://postgres:postgres@localhost/postgres

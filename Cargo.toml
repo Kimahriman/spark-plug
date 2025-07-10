@@ -1,3 +1,4 @@
 [workspace]
 resolver = "3"
-members = ["server"]
+members = ["server", "server/migration"]
+default-members = ["server"]

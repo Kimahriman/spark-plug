@@ -6,7 +6,11 @@ use axum::{
     Extension, Json, Router,
 };
 use http::StatusCode;
-use log::{info, warn};
+use log::{error, info, warn};
+use migration::Expr;
+use sea_orm::{
+    ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
+};
 use serde::{Deserialize, Serialize};
 use tower::ServiceBuilder;
 use tower_http::auth::AsyncRequireAuthorizationLayer;
@@ -15,14 +19,13 @@ use uuid::Uuid;
 use crate::{
     auth::{BearerToken, TokenAuth, UserAuth, UserId},
     config::ProxyConfig,
+    entities::application,
     launcher::Launcher,
-    models::Application,
-    store::ApplicationStore,
 };
 
-pub async fn get_router(config: &ProxyConfig, app_store: Arc<dyn ApplicationStore>) -> Router {
+pub async fn get_router(config: &ProxyConfig, db: DatabaseConnection) -> Router {
     let app_state = AppStateDyn {
-        app_store,
+        db,
         launcher: Arc::new(Launcher::from_config(config)),
     };
 
@@ -47,7 +50,7 @@ pub async fn get_router(config: &ProxyConfig, app_store: Arc<dyn ApplicationStor
 
 #[derive(Clone)]
 struct AppStateDyn {
-    app_store: Arc<dyn ApplicationStore>,
+    db: DatabaseConnection,
     launcher: Arc<Launcher>,
 }
 
@@ -71,10 +74,16 @@ async fn create_app(
     Json(params): Json<CreateApplicationRequest>,
 ) -> Result<Json<ApplicationInfo>, StatusCode> {
     let token = Uuid::new_v4().to_string();
-    let app = state
-        .app_store
-        .create_app(user.0.clone(), token.clone())
-        .await;
+
+    let app = application::ActiveModel {
+        username: ActiveValue::Set(user.0.clone()),
+        token: ActiveValue::Set(token.clone()),
+        ..Default::default()
+    };
+    let res = app.insert(&state.db).await.map_err(|e| {
+        error!("Failed to insert application into db: {e:?}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     state
         .launcher
@@ -91,9 +100,9 @@ async fn create_app(
         })?;
 
     Ok(Json(ApplicationInfo {
-        id: app.id,
+        id: res.id,
         token,
-        active: app.addr.is_some(),
+        active: res.address.is_some(),
     }))
 }
 
@@ -102,32 +111,59 @@ async fn get_app(
     Path(app_id): Path<i32>,
     Extension(user): Extension<UserId>,
 ) -> Result<Json<ApplicationInfo>, StatusCode> {
-    let app = state
-        .app_store
-        .get_app(user.0, app_id)
+    let app = application::Entity::find()
+        .filter(application::Column::Username.eq(user.0))
+        .filter(application::Column::Id.eq(app_id))
+        .one(&state.db)
         .await
+        .map_err(|e| {
+            error!("Failed to get application from from db: {e:?}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
         .ok_or(StatusCode::NOT_FOUND)?;
 
     Ok(Json(ApplicationInfo {
         id: app.id,
         token: app.token,
-        active: app.addr.is_some(),
+        active: app.address.is_some(),
     }))
 }
 
 async fn list_apps(
     State(state): State<AppStateDyn>,
     Extension(user): Extension<UserId>,
-) -> Json<Vec<Application>> {
-    Json(state.app_store.list_apps(user.0).await)
+) -> Result<Json<Vec<application::Model>>, StatusCode> {
+    let apps = application::Entity::find()
+        .filter(application::Column::Username.eq(user.0))
+        .all(&state.db)
+        .await
+        .map_err(|e| {
+            error!("Failed to get applications from db: {e:?}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    Ok(Json(apps))
 }
 
 async fn delete_app(
     State(state): State<AppStateDyn>,
     Path(app_id): Path<i32>,
     Extension(user): Extension<UserId>,
-) {
-    state.app_store.delete_app(user.0, app_id).await;
+) -> Result<(), StatusCode> {
+    let res = application::Entity::delete_many()
+        .filter(application::Column::Username.eq(user.0))
+        .filter(application::Column::Id.eq(app_id))
+        .exec(&state.db)
+        .await
+        .map_err(|e| {
+            error!("Failed to delete app from db: {e:?}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    if res.rows_affected == 0 {
+        Err(StatusCode::NOT_FOUND)
+    } else {
+        Ok(())
+    }
 }
 
 async fn list_versions(State(state): State<AppStateDyn>) -> Json<Vec<String>> {
@@ -145,11 +181,22 @@ async fn app_callback(
     Json(params): Json<ApplicationCallbackRequest>,
 ) -> Result<(), StatusCode> {
     info!("Got the callback for {}", token.0);
-    state
-        .app_store
-        .set_app_addr(token.0, Some(params.address))
-        .await;
-    Ok(())
+
+    let res = application::Entity::update_many()
+        .col_expr(application::Column::Address, Expr::value(params.address))
+        .filter(application::Column::Token.eq(token.0))
+        .exec(&state.db)
+        .await
+        .map_err(|e| {
+            error!("Failed to set address from callback {e:?}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    if res.rows_affected == 0 {
+        Err(StatusCode::NOT_FOUND)
+    } else {
+        Ok(())
+    }
 }
 
 async fn app_callback_delete(
@@ -157,6 +204,19 @@ async fn app_callback_delete(
     Extension(token): Extension<BearerToken>,
 ) -> Result<(), StatusCode> {
     info!("Got the delete callback for {}", token.0);
-    state.app_store.set_app_addr(token.0, None).await;
-    Ok(())
+
+    let res = application::Entity::delete_many()
+        .filter(application::Column::Token.eq(token.0))
+        .exec(&state.db)
+        .await
+        .map_err(|e| {
+            error!("Failed to delete app from db: {e:?}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    if res.rows_affected == 0 {
+        Err(StatusCode::NOT_FOUND)
+    } else {
+        Ok(())
+    }
 }

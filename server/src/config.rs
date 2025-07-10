@@ -1,19 +1,11 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
-use deadpool_diesel::sqlite;
-use diesel_migrations::MigrationHarness;
 use figment::{
     providers::{Format, Yaml},
     Figment,
 };
 use local_ip_address::local_ip;
-use log::info;
 use serde::Deserialize;
-
-use crate::{
-    models::MIGRATIONS,
-    store::{ApplicationStore, DieselSqliteStore},
-};
 
 const DEFAULT_PORT: u16 = 8100;
 
@@ -29,60 +21,6 @@ pub struct SparkVersion {
     pub default_configs: Option<HashMap<String, String>>,
     pub merge_configs: Option<HashMap<String, String>>,
     pub override_configs: Option<HashMap<String, String>>,
-}
-
-#[derive(Clone, Deserialize)]
-pub struct StoreConfig {
-    name: String,
-    options: HashMap<String, String>,
-}
-
-impl Default for StoreConfig {
-    fn default() -> Self {
-        Self {
-            name: "memory".to_string(),
-            options: Default::default(),
-        }
-    }
-}
-
-async fn create_sqlite_pool(path: &str) -> sqlite::Pool {
-    let manager = sqlite::Manager::new(path, sqlite::Runtime::Tokio1);
-    let pool = sqlite::Pool::builder(manager)
-        .max_size(10)
-        .build()
-        .expect("Failed to build sqlite connection pool");
-
-    let conn = pool
-        .get()
-        .await
-        .expect("Failed to get connection from sqlite pool");
-    conn.interact(|conn| {
-        conn.run_pending_migrations(MIGRATIONS)
-            .expect("Failed to run migrations");
-    })
-    .await
-    .unwrap();
-
-    info!("Created sqlite pool for {path}");
-
-    pool
-}
-
-impl StoreConfig {
-    pub async fn get_store(&self) -> Arc<dyn ApplicationStore> {
-        match self.name.as_ref() {
-            "memory" => Arc::new(DieselSqliteStore::new(create_sqlite_pool(":memory:").await)),
-            "sqlite" => {
-                let path = self
-                    .options
-                    .get("path")
-                    .expect("path missing for sqlite store");
-                Arc::new(DieselSqliteStore::new(create_sqlite_pool(path).await))
-            }
-            name => panic!("Unknown store type {name}"),
-        }
-    }
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -109,7 +47,7 @@ pub struct ProxyConfig {
     pub bind_host: Option<String>,
     pub bind_port: Option<u16>,
     pub callback_address: Option<String>,
-    pub store: Option<StoreConfig>,
+    pub store: Option<String>,
     pub kerberos_config: Option<KerberosConfig>,
     pub tls: Option<TlsConfig>,
     pub spark_versions: Option<Vec<SparkVersion>>,

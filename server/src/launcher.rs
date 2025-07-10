@@ -109,6 +109,12 @@ impl Launcher {
                 ))?
         };
 
+        let mut env = version.env.clone().unwrap_or_default();
+
+        // Spark has trouble using the actual IP of the local host on Macs
+        #[cfg(target_os = "macos")]
+        env.insert("SPARK_LOCAL_IP".to_string(), "127.0.0.1".to_string());
+
         // Start with the default config for this version
         let mut configs = version.default_configs.clone().unwrap_or_default();
 
@@ -172,7 +178,7 @@ impl Launcher {
 
         Command::new(submit_path)
             .args(args)
-            .envs(version.env.clone().unwrap_or_default())
+            .envs(env)
             // .env("SPARK_HOME", &version.home)
             // .stdout(Stdio::piped())
             // .stderr(Stdio::piped())

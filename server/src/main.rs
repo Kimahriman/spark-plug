@@ -17,7 +17,8 @@ use hyper_util::server::conn::auto::Builder;
 use log::{debug, error, info};
 use routes::get_router;
 use rustls_pemfile::{certs, private_key};
-use store::ApplicationStore;
+use sea_orm::{ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm_migration::MigratorTrait;
 use tokio::net::TcpStream;
 use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot};
@@ -25,14 +26,16 @@ use tokio_rustls::TlsAcceptor;
 use tower::Service as TowerService;
 use which::which;
 
+use migration::Migrator;
+
+use crate::entities::application;
+
 mod auth;
 mod config;
+mod entities;
 mod error;
 mod launcher;
-mod models;
 mod routes;
-mod schema;
-mod store;
 
 /// Start the Spark Connect Proxy server
 #[derive(Parser, Debug)]
@@ -51,7 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args = Args::parse();
 
-    let mut config = args
+    let config = args
         .config_file
         .map(ProxyConfig::from_file)
         .unwrap_or_default();
@@ -66,8 +69,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = tokio::net::TcpListener::bind(format!("{bind_host}:{bind_port}")).await?;
 
-    let session_store = config.store.take().unwrap_or_default().get_store().await;
-    let router = get_router(&config, session_store.clone()).await;
+    let store_url = config
+        .store
+        .as_ref()
+        .map(String::as_ref)
+        .unwrap_or("sqlite::memory:");
+    let db = Database::connect(store_url).await?;
+    Migrator::up(&db, None).await?;
+
+    let router = get_router(&config, db.clone()).await;
     let tls_acceptor = load_tls_acceptor(&config)?;
 
     info!("Listening on http://{:?}", listener.local_addr().unwrap());
@@ -80,7 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         info!("Serving new connection");
         let router = router.clone();
-        let session_store = session_store.clone();
+        let db = db.clone();
 
         if let Some(acceptor) = tls_acceptor.as_ref() {
             let io = TokioIo::new(acceptor.accept(stream).await?);
@@ -88,7 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tokio::task::spawn(async move {
                 // Serve via TLS
                 let result = Builder::new(TokioExecutor::new())
-                    .serve_connection(io, ProxyService::new(router, session_store))
+                    .serve_connection(io, ProxyService::new(router, db))
                     .await;
 
                 if let Err(err) = result {
@@ -99,10 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tokio::task::spawn(async move {
                 // Serve unencrypted
                 let result = Builder::new(TokioExecutor::new())
-                    .serve_connection(
-                        TokioIo::new(stream),
-                        ProxyService::new(router, session_store),
-                    )
+                    .serve_connection(TokioIo::new(stream), ProxyService::new(router, db))
                     .await;
 
                 if let Err(err) = result {
@@ -138,29 +145,44 @@ type UpstreamMessage = (
     oneshot::Sender<Result<Response<axum::body::Body>, hyper::Error>>,
 );
 
-struct UpstreamConnection {
-    rx: mpsc::UnboundedReceiver<UpstreamMessage>,
-}
-
-impl UpstreamConnection {
-    async fn start(mut self, addr: &str) {
-        let client_stream = TcpStream::connect(addr).await.unwrap();
-        let io = TokioIo::new(client_stream);
-
-        let (mut sender, conn) = hyper::client::conn::http2::handshake(TokioExecutor::new(), io)
+async fn upstream_connection(
+    mut rx: mpsc::UnboundedReceiver<UpstreamMessage>,
+    token: String,
+    db: DatabaseConnection,
+) {
+    let mut sender = {
+        let address = application::Entity::find()
+            .filter(application::Column::Token.eq(token))
+            .one(&db)
             .await
-            .unwrap();
-        tokio::task::spawn(async move {
-            debug!("Spawned connection await");
-            if let Err(err) = conn.await {
-                error!("Connection failed: {err:?}");
-            }
-        });
+            .inspect_err(|e| error!("Failed to retrieve app by token: {e:?}"))
+            .ok()
+            .flatten()
+            .and_then(|app| app.address);
 
-        while let Some((mut req, tx)) = self.rx.recv().await {
+        if let Some(address) = address {
+            let client_stream = TcpStream::connect(&address).await.unwrap();
+            let io = TokioIo::new(client_stream);
+
+            let (sender, conn) = hyper::client::conn::http2::handshake(TokioExecutor::new(), io)
+                .await
+                .unwrap();
+            tokio::task::spawn(async move {
+                debug!("Spawned connection await");
+                if let Err(err) = conn.await {
+                    error!("Connection failed: {err:?}");
+                }
+            });
+            Some((sender, address))
+        } else {
+            None
+        }
+    };
+
+    while let Some((mut req, tx)) = rx.recv().await {
+        if let Some((sender, address)) = sender.as_mut() {
             let uri_string = format!(
-                "http://{}{}",
-                addr,
+                "http://{address}{}",
                 req.uri()
                     .path_and_query()
                     .map(|x| x.as_str())
@@ -177,6 +199,12 @@ impl UpstreamConnection {
                     .map(|response| response.map(axum::body::Body::new)),
             )
             .unwrap();
+        } else {
+            tx.send(Ok(Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(().into())
+                .unwrap()))
+                .unwrap();
         }
     }
 }
@@ -184,15 +212,15 @@ impl UpstreamConnection {
 struct ProxyService {
     dispatch: Mutex<Option<mpsc::UnboundedSender<UpstreamMessage>>>,
     router: Router,
-    session_store: Arc<dyn ApplicationStore>,
+    db: DatabaseConnection,
 }
 
 impl ProxyService {
-    fn new(router: Router, session_store: Arc<dyn ApplicationStore>) -> Self {
+    fn new(router: Router, db: DatabaseConnection) -> Self {
         Self {
             dispatch: Mutex::new(None),
             router,
-            session_store,
+            db,
         }
     }
 
@@ -216,7 +244,7 @@ impl ProxyService {
 
             let split = authorization.split_once(' ');
             let token = match split {
-                Some(("Bearer", token)) => token,
+                Some(("Bearer", token)) => token.to_string(),
                 _ => {
                     let response = Response::builder()
                         .status(StatusCode::BAD_REQUEST)
@@ -227,26 +255,12 @@ impl ProxyService {
                 }
             };
 
-            // TODO: figure out how to not need block_on here
-            if let Some(session) =
-                futures::executor::block_on(self.session_store.get_app_by_token(token.to_string()))
-            {
-                let (upstream_sender, upstream_receiver) = mpsc::unbounded_channel();
-                let upstream = UpstreamConnection {
-                    rx: upstream_receiver,
-                };
-                tokio::task::spawn(
-                    async move { upstream.start(session.addr.unwrap().as_ref()).await },
-                );
-                *dispatch = Some(upstream_sender);
-            } else {
-                let response = Response::builder()
-                    .status(StatusCode::NOT_FOUND)
-                    .body(().into())
-                    .unwrap();
-                tx.send(Ok(response)).unwrap();
-                return rx;
-            }
+            let (upstream_sender, upstream_receiver) = mpsc::unbounded_channel();
+            let db = self.db.clone();
+            tokio::task::spawn(
+                async move { upstream_connection(upstream_receiver, token, db).await },
+            );
+            *dispatch = Some(upstream_sender);
         }
         dispatch.as_mut().unwrap().send((req, tx)).unwrap();
         rx
