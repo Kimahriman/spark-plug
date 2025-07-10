@@ -10,8 +10,10 @@ RUN --mount=type=cache,target=/usr/src/app/target/ \
 
 FROM eclipse-temurin:17 AS java-builder
 
-RUN wget -q https://github.com/sbt/sbt/releases/download/v1.10.11/sbt-1.10.11.tgz && \
-    tar -xf sbt-1.10.11.tgz -C /opt && \
+ARG SBT_VERSION=1.10.11
+
+RUN wget -q https://github.com/sbt/sbt/releases/download/v${SBT_VERSION}/sbt-${SBT_VERSION}.tgz && \
+    tar -xf sbt-${SBT_VERSION}.tgz -C /opt && \
     /opt/sbt/bin/sbt --version
 
 WORKDIR /usr/src/app
