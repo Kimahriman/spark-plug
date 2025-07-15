@@ -1,13 +1,14 @@
 use std::{collections::HashMap, sync::Arc};
 
 use axum::{
+    Extension, Json, Router,
     extract::{Path, State},
     routing::{get, post},
-    Extension, Json, Router,
 };
 use http::StatusCode;
 use log::{error, info, warn};
 use migration::Expr;
+use reqwest::ClientBuilder;
 use sea_orm::{
     ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
 };
@@ -54,15 +55,14 @@ struct AppStateDyn {
     launcher: Arc<Launcher>,
 }
 
-#[allow(dead_code)]
 #[derive(Deserialize)]
 struct CreateApplicationRequest {
     version: Option<String>,
     config: Option<HashMap<String, String>>,
 }
 
-#[derive(Serialize)]
-struct ApplicationInfo {
+#[derive(Serialize, Deserialize)]
+pub struct ApplicationInfo {
     id: i32,
     token: String,
     active: bool,
@@ -149,20 +149,32 @@ async fn delete_app(
     Path(app_id): Path<i32>,
     Extension(user): Extension<UserId>,
 ) -> Result<(), StatusCode> {
-    let res = application::Entity::delete_many()
-        .filter(application::Column::Username.eq(user.0))
-        .filter(application::Column::Id.eq(app_id))
-        .exec(&state.db)
+    let model = application::ActiveModel {
+        id: ActiveValue::Set(app_id),
+        username: ActiveValue::Set(user.0),
+        ..Default::default()
+    };
+
+    let res = application::Entity::delete(model)
+        .exec_with_returning(&state.db)
         .await
         .map_err(|e| {
             error!("Failed to delete app from db: {e:?}");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    if res.rows_affected == 0 {
-        Err(StatusCode::NOT_FOUND)
-    } else {
+    if let Some(app) = res {
+        if let Some(address) = app.address {
+            send_session_message(&address, &app.token, "stop")
+                .await
+                .map_err(|e| {
+                    error!("Failed to stop session: {e:?}");
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?;
+        }
         Ok(())
+    } else {
+        Err(StatusCode::NOT_FOUND)
     }
 }
 
@@ -219,4 +231,21 @@ async fn app_callback_delete(
     } else {
         Ok(())
     }
+}
+
+async fn send_session_message(address: &str, token: &str, message: &str) -> anyhow::Result<()> {
+    let client = ClientBuilder::new().http2_prior_knowledge().build()?;
+    let res = client
+        .post(format!(
+            "http://{address}/spark.connect.SparkConnectService/Config"
+        ))
+        .bearer_auth(token)
+        .header("X-Connect-Proxy", message)
+        .header("Content-Type", "application/grpc")
+        .header("TE", "trailers")
+        .send()
+        .await?;
+    info!("Stop session response: {res:?}");
+    res.error_for_status()?;
+    Ok(())
 }

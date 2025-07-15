@@ -13,4 +13,4 @@ dev = [
 ]
 
 [tool.uv.workspace]
-members = ["client"]
+members = ["clients/python"]

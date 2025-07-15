@@ -17,10 +17,11 @@ class SparkConnectProxyInterceptor extends ServerInterceptor {
       metadata: Metadata,
       next: ServerCallHandler[ReqT,RespT]
   ): Listener[ReqT] = {
+    println("Intercepting", metadata)
     Option(metadata.get(proxyMessageHeader)) match {
       case Some("stop") =>
+        call.close(Status.CANCELLED, new Metadata())
         SparkConnectService.stop()
-        call.close(Status.OK, new Metadata())
         new Listener[ReqT]() {}
       case Some(message) =>
         call.close(Status.INVALID_ARGUMENT, new Metadata())

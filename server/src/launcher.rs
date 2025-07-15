@@ -162,7 +162,10 @@ impl Launcher {
 
         args.extend([
             "--jars".to_string(),
-            "plugin/target/scala-2.13/spark-connect-proxy_2.13-*.jar".to_string(),
+            format!(
+                "{}/../plugin/target/scala-2.13/spark-connect-proxy_2.13-0.1.0.jar",
+                env!("CARGO_MANIFEST_DIR")
+            ),
         ]);
 
         args.extend([
