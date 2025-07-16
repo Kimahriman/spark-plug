@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use figment::{
-    providers::{Format, Yaml},
     Figment,
+    providers::{Format, Yaml},
 };
 use local_ip_address::local_ip;
 use serde::Deserialize;
@@ -16,6 +16,7 @@ pub struct SparkVersion {
     // SPARK_HOME directory for this version
     pub home: String,
     pub default: bool,
+    pub master: Option<String>,
     pub proxy_user: bool,
     pub env: Option<HashMap<String, String>>,
     pub default_configs: Option<HashMap<String, String>>,
@@ -47,6 +48,7 @@ pub struct ProxyConfig {
     pub bind_host: Option<String>,
     pub bind_port: Option<u16>,
     pub callback_address: Option<String>,
+    pub session_timeout: Option<u32>,
     pub store: Option<String>,
     pub kerberos_config: Option<KerberosConfig>,
     pub tls: Option<TlsConfig>,

@@ -3,8 +3,8 @@ use std::{collections::HashMap, fs, sync::Arc};
 use anyhow::Result;
 use axum::response::IntoResponse;
 use futures_util::future::BoxFuture;
-use http::{header::AUTHORIZATION, HeaderMap, Request, Response, StatusCode};
-use jsonwebtoken::{decode, decode_header, DecodingKey, TokenData, Validation};
+use http::{HeaderMap, Request, Response, StatusCode, header::AUTHORIZATION};
+use jsonwebtoken::{DecodingKey, TokenData, Validation, decode, decode_header};
 use jwks::Jwks;
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
@@ -173,33 +173,6 @@ impl UserAuthMethod for JWKSAuth {
     }
 }
 
-// struct PamAuth {
-//     lib: PAM,
-// }
-
-// impl UserAuthMethod for PamAuth {
-//     fn authorize_user(&self, header_map: &HeaderMap) -> Option<String> {
-//         let auth_header = header_map
-//             .get("Authorization")
-//             .unwrap()
-//             .to_str()
-//             .ok()
-//             .unwrap();
-//         if !auth_header.starts_with("Basic ") {
-//             return None;
-//         }
-//         let encoded = &auth_header[6..];
-//         let decoded = String::from_utf8(BASE64_STANDARD.decode(encoded).unwrap()).unwrap();
-//         let (username, password) = decoded.split_once(":").unwrap();
-
-//         let mut client = pam::Client::with_password("system-auth").unwrap();
-//         client
-//             .conversation_mut()
-//             .set_credentials(username, password);
-//         client.authenticate().map(|_| username.to_string()).ok()
-//     }
-// }
-
 #[derive(Clone)]
 pub struct UserAuth {
     auth_methods: Vec<Arc<dyn UserAuthMethod>>,
@@ -220,7 +193,7 @@ impl UserAuth {
                     }
                     "jwt" => auth_methods.push(Arc::new(JWTAuth::create(auth_options))),
                     "jwks" => auth_methods.push(Arc::new(JWKSAuth::create(auth_options).await)),
-                    name => panic!("Unknown authentication method: {}", name),
+                    name => panic!("Unknown authentication method: {name}"),
                 }
             }
         } else {
@@ -249,7 +222,7 @@ impl AsyncAuthorizeRequest<axum::body::Body> for UserAuth {
                         username = Some(user);
                         break;
                     }
-                    Err(e) => warn!("Error trying to authorize user: {:?}", e),
+                    Err(e) => warn!("Error trying to authorize user: {e:?}"),
                     _ => (),
                 }
             }
@@ -286,7 +259,7 @@ impl AsyncAuthorizeRequest<axum::body::Body> for TokenAuth {
                 .map_err(|_| StatusCode::BAD_REQUEST.into_response())?
                 .to_string();
 
-            info!("Authorizing token: {}", authorization);
+            info!("Authorizing token: {authorization}");
 
             let split = authorization.split_once(' ');
             let token = match split {

@@ -5,10 +5,10 @@ use std::time::Duration;
 use std::{fs, io};
 
 use axum::Router;
-use clap::{command, Parser};
+use clap::{Parser, command};
 use config::{KerberosConfig, ProxyConfig};
-use http::header::AUTHORIZATION;
 use http::StatusCode;
+use http::header::AUTHORIZATION;
 use hyper::body::Incoming;
 use hyper::service::Service;
 use hyper::{Request, Response};

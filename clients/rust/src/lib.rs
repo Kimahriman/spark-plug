@@ -83,7 +83,7 @@ impl ConnectProxyClient {
 }
 
 #[derive(Serialize)]
-pub struct CreateApplication {
+struct CreateApplication {
     version: Option<String>,
     config: HashMap<String, String>,
 }

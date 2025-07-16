@@ -23,6 +23,7 @@ pub struct Launcher {
     // Map of Spark version key to path it's located at
     versions: Vec<SparkVersion>,
     callback_addr: String,
+    session_timeout: u32,
 }
 
 impl Launcher {
@@ -77,6 +78,7 @@ impl Launcher {
         Self {
             versions,
             callback_addr,
+            session_timeout: config.session_timeout.unwrap_or(3600),
         }
     }
 
@@ -138,7 +140,7 @@ impl Launcher {
         // Finally add our internal configs
         configs.insert(TOKEN_CONFIG.to_string(), token);
         configs.insert(CALLBACK_CONFIG.to_string(), self.callback_addr.clone());
-        configs.insert(TIMEOUT_CONFIG.to_string(), "60".to_string());
+        configs.insert(TIMEOUT_CONFIG.to_string(), self.session_timeout.to_string());
         configs.insert(
             "spark.extraListeners".to_string(),
             "org.apache.spark.sql.connect.proxy.SparkConnectProxyListener".to_string(),
@@ -154,7 +156,10 @@ impl Launcher {
 
         let submit_path = PathBuf::from(&version.home).join("bin/spark-submit");
 
-        let mut args = vec!["--master".to_string(), "local".to_string()];
+        let mut args = vec![
+            "--master".to_string(),
+            version.master.clone().unwrap_or("local".to_string()),
+        ];
 
         for (key, value) in configs.iter() {
             args.extend(["--conf".to_string(), format!("{key}={value}")]);
@@ -170,7 +175,7 @@ impl Launcher {
 
         args.extend([
             "--class".to_string(),
-            "org.apache.spark.sql.connect.service.SparkConnectServer".to_string(),
+            "org.apache.spark.sql.connect.proxy.SparkConnectProxyServer".to_string(),
         ]);
 
         if version.proxy_user {

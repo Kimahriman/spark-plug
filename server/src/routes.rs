@@ -11,6 +11,7 @@ use migration::Expr;
 use reqwest::ClientBuilder;
 use sea_orm::{
     ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    sqlx::types::chrono::Utc,
 };
 use serde::{Deserialize, Serialize};
 use tower::ServiceBuilder;
@@ -76,6 +77,7 @@ async fn create_app(
     let token = Uuid::new_v4().to_string();
 
     let app = application::ActiveModel {
+        created_at: ActiveValue::Set(Utc::now()),
         username: ActiveValue::Set(user.0.clone()),
         token: ActiveValue::Set(token.clone()),
         ..Default::default()
@@ -234,6 +236,7 @@ async fn app_callback_delete(
 }
 
 async fn send_session_message(address: &str, token: &str, message: &str) -> anyhow::Result<()> {
+    // Fake out a gRPC call that will get picked up by the server interceptor
     let client = ClientBuilder::new().http2_prior_knowledge().build()?;
     let res = client
         .post(format!(

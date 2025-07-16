@@ -15,6 +15,7 @@ impl MigrationTrait for Migration {
                     .col(string(Application::Username))
                     .col(string(Application::Token))
                     .col(string_null(Application::Address))
+                    .col(timestamp_with_time_zone(Application::CreatedAt))
                     .to_owned(),
             )
             .await?;
@@ -77,6 +78,7 @@ impl MigrationTrait for Migration {
 enum Application {
     Table,
     Id,
+    CreatedAt,
     Username,
     Token,
     Address,
