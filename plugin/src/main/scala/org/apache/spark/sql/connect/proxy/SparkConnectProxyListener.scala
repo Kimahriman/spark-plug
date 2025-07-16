@@ -1,23 +1,18 @@
 package org.apache.spark.sql.connect.proxy
 
-import java.net.http.HttpRequest
-import java.net.URI
-import java.time.Duration
-
-import java.time.temporal.ChronoUnit.SECONDS
-
-import org.apache.spark.SparkContext
-import org.apache.spark.internal.Logging
-import org.apache.spark.scheduler.SparkListener
-import org.apache.spark.scheduler.SparkListenerEvent
-import org.apache.spark.sql.connect.service.SparkConnectService
-import org.apache.spark.sql.connect.service.SparkListenerConnectServiceStarted
-import java.net.http.HttpClient
+import java.net.http.{HttpClient, HttpRequest}
 import java.net.http.HttpResponse.BodyHandlers
-import org.apache.spark.SparkException
-import org.apache.spark.SparkConf
-import org.apache.spark.sql.connect.service.SparkListenerConnectServiceEnd
+import java.net.{Socket, URI}
+import java.security.cert.X509Certificate
+import java.security.SecureRandom
+import java.time.Duration
+import java.time.temporal.ChronoUnit.SECONDS
+import javax.net.ssl.{SSLContext, SSLEngine, X509ExtendedTrustManager}
+import org.apache.spark.internal.Logging
+import org.apache.spark.scheduler.{SparkListener, SparkListenerEvent}
+import org.apache.spark.{SparkConf, SparkContext, SparkException}
 import org.apache.spark.sql.connect.config.Connect
+import org.apache.spark.sql.connect.service.{SparkConnectService, SparkListenerConnectServiceEnd, SparkListenerConnectServiceStarted}
 
 class SparkConnectProxyListener(conf: SparkConf) extends SparkListener with Logging {
 
@@ -26,6 +21,28 @@ class SparkConnectProxyListener(conf: SparkConf) extends SparkListener with Logg
   val token = conf.get("spark.connect.authenticate.token")
 
   lazy val authorizationHeader = s"Bearer $token"
+
+  // val trustManager: X509ExtendedTrustManager = new X509ExtendedTrustManager() {
+
+  //   override def checkClientTrusted(chain: Array[X509Certificate], authType: String): Unit = {}
+
+  //   override def getAcceptedIssuers(): Array[X509Certificate] = Array.empty
+
+  //   override def checkClientTrusted(chain: Array[X509Certificate], authType: String, socket: Socket): Unit = {}
+
+  //   override def checkServerTrusted(chain: Array[X509Certificate], authType: String, socket: Socket): Unit = {}
+
+  //   override def checkClientTrusted(chain: Array[X509Certificate], authType: String, engine: SSLEngine): Unit = {}
+
+  //   override def checkServerTrusted(chain: Array[X509Certificate], authType: String, engine: SSLEngine): Unit = {}
+
+  //   override def checkServerTrusted(chain: Array[X509Certificate], authType: String): Unit = {}
+  // }
+
+  // val sslContext = SSLContext.getInstance("TLS")
+  // sslContext.init(null, Array(trustManager), new SecureRandom())
+
+  // lazy val client = HttpClient.newBuilder().sslContext(sslContext).build()
 
   lazy val client = HttpClient.newHttpClient()
 

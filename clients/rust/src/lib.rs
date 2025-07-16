@@ -5,15 +5,25 @@ use serde::{Deserialize, Serialize};
 use spark_connect_rs::{SparkSession, SparkSessionBuilder};
 use url::Url;
 
+// Re-export reqwest ClientBuilder if users need a custom client
+pub use reqwest::ClientBuilder;
+
 pub struct ConnectProxyClient {
     base_url: String,
     client: Client,
 }
 
 impl ConnectProxyClient {
-    pub fn new(url: &str) -> Self {
+    pub fn new(url: impl ToString) -> Self {
         let client = Client::new();
 
+        Self {
+            base_url: url.to_string(),
+            client,
+        }
+    }
+
+    pub fn from_client(url: impl ToString, client: Client) -> Self {
         Self {
             base_url: url.to_string(),
             client,
@@ -64,9 +74,15 @@ impl ConnectProxyClient {
         let port_str = url.port().map(|p| format!(":{p}")).unwrap_or_default();
         let sc_url = format!("sc://{}{port_str}", url.host_str().unwrap());
 
-        let session = SparkSessionBuilder::remote(&format!("{}/;token={}", sc_url, app.token))
-            .build()
-            .await?;
+        let use_ssl = if self.base_url.starts_with("https") {
+            ";use_ssl=true"
+        } else {
+            ""
+        };
+
+        let connection = format!("{}/;token={}{use_ssl}", sc_url, app.token);
+
+        let session = SparkSessionBuilder::remote(&connection).build().await?;
 
         Ok(session)
     }

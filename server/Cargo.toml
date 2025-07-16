@@ -25,8 +25,8 @@ jsonwebtoken = "9"
 jwks = "0.4"
 local-ip-address = "0.6"
 log = "0.4"
-reqwest = { version = "0.12", features = ["json"] }
-rustls = "0.23"
+reqwest = { version = "0.12", default-features = false, features = ["h2", "http2", "json"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
 rustls-pemfile = "2"
 rustls-pki-types = "1"
 sea-orm = { version = "1", features = ["sqlx-all", "sqlite-use-returning-for-3_35", "runtime-tokio-rustls"] }
@@ -34,7 +34,7 @@ sea-orm-migration = { version = "1.1.13", features = ["runtime-tokio-rustls", "s
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
-tokio-rustls = "0.26"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["auth"] }
 uuid = { version = "1", features = ["v4"] }
@@ -44,4 +44,6 @@ whoami = "1"
 migration = { path = "./migration" }
 
 [dev-dependencies]
+rcgen = "0.14"
 spark-connect-proxy-client = { path = "../clients/rust" }
+tempfile = "3"

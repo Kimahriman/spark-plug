@@ -166,14 +166,6 @@ impl Launcher {
         }
 
         args.extend([
-            "--jars".to_string(),
-            format!(
-                "{}/../plugin/target/scala-2.13/spark-connect-proxy_2.13-0.1.0.jar",
-                env!("CARGO_MANIFEST_DIR")
-            ),
-        ]);
-
-        args.extend([
             "--class".to_string(),
             "org.apache.spark.sql.connect.proxy.SparkConnectProxyServer".to_string(),
         ]);
@@ -181,6 +173,11 @@ impl Launcher {
         if version.proxy_user {
             args.extend(["--proxy-user".to_string(), username]);
         }
+
+        args.push(format!(
+            "{}/../plugin/target/scala-2.13/spark-connect-proxy_2.13-0.1.0.jar",
+            env!("CARGO_MANIFEST_DIR")
+        ));
 
         info!("Running {:?} {}", submit_path, args.join(" "));
 
