@@ -16,3 +16,12 @@ services:
       POSTGRES_PASSWORD: postgres
     ports:
       - 5432:5432
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.3.1
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+    ports:
+      - 8080:8080
+    command: ["start-dev"]

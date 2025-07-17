@@ -278,13 +278,14 @@ async fn upstream_connection(
 
             info!("Proxying request {:?}", req.uri().path_and_query());
 
-            tx.send(
-                sender
-                    .send_request(req)
-                    .await
-                    .map(|response| response.map(axum::body::Body::new)),
-            )
-            .unwrap();
+            let response = sender
+                .send_request(req)
+                .await
+                .map(|response| response.map(axum::body::Body::new));
+
+            info!("Proxying response {response:?}");
+
+            tx.send(response).unwrap();
         } else {
             tx.send(Ok(Response::builder()
                 .status(StatusCode::NOT_FOUND)

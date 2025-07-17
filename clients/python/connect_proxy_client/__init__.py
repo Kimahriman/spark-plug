@@ -21,9 +21,9 @@ class Application:
 
 
 class ConnectProxyClient:
-    def __init__(self, url: str):
+    def __init__(self, url: str, session: Optional[Session]):
         self.url = url
-        self.session = Session()
+        self.session = session or Session()
         self.session.headers["Content-type"] = "application/json"
 
     def create_application(

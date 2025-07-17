@@ -125,6 +125,7 @@ impl UserAuthMethod for JWTAuth {
 
 struct JWKSAuth {
     jwks: Jwks,
+    audience: Option<String>,
 }
 
 impl JWKSAuth {
@@ -140,7 +141,9 @@ impl JWKSAuth {
             (None, None) => panic!("Either jwks_url or oidc_url must be provided"),
         };
 
-        Self { jwks }
+        let audience = options.get("audience").cloned();
+
+        Self { jwks, audience }
     }
 }
 
@@ -163,7 +166,10 @@ impl UserAuthMethod for JWKSAuth {
                     "jwt refer to a unknown key id".to_string(),
                 ))?;
 
-            let validation = Validation::default();
+            let mut validation = Validation::new(jwk.alg.to_string().parse()?);
+            if let Some(audience) = self.audience.as_ref() {
+                validation.set_audience(&[audience]);
+            }
             let decoded_token: TokenData<JWTClaims> =
                 decode::<JWTClaims>(token, &jwk.decoding_key, &validation)?;
             Ok(Some(decoded_token.claims.sub))
@@ -195,6 +201,7 @@ impl UserAuth {
                     "jwks" => auth_methods.push(Arc::new(JWKSAuth::create(auth_options).await)),
                     name => panic!("Unknown authentication method: {name}"),
                 }
+                info!("Enabling auth method {}", auth_config.name);
             }
         } else {
             auth_methods.push(Arc::new(CurrentUserAuth {}));
