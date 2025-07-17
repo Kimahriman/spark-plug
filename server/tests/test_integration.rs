@@ -1,7 +1,6 @@
 mod test {
-    use std::{collections::HashMap, io::Write};
+    use std::{collections::HashMap, io::Write, time::Duration};
 
-    use http::header;
     use reqwest::ClientBuilder;
     use spark_connect_proxy::config::{ProxyConfig, TlsConfig};
     use spark_connect_proxy_client::ConnectProxyClient;
@@ -12,23 +11,25 @@ mod test {
     }
 
     impl Server {
-        fn start(tls: Option<TlsConfig>) -> Self {
+        async fn start(tls: Option<TlsConfig>) -> Self {
             let task = tokio::task::spawn(async {
                 let protocol = if tls.is_some() { "https" } else { "http" };
 
                 let config = ProxyConfig {
                     callback_address: Some(format!("{protocol}://127.0.0.1:8100")),
+                    session_timeout: Some(60),
                     tls,
                     ..Default::default()
                 };
-                spark_connect_proxy::run(config).await.unwrap()
+                spark_connect_proxy::Server::from_config(config)
+                    .await
+                    .unwrap()
+                    .run()
+                    .await
+                    .unwrap()
             });
 
-            let mut headers = header::HeaderMap::new();
-            headers.insert(
-                header::CONTENT_TYPE,
-                header::HeaderValue::from_static("application/json"),
-            );
+            tokio::time::sleep(Duration::from_secs(1)).await;
 
             Self { task }
         }
@@ -42,7 +43,12 @@ mod test {
 
     #[tokio::test]
     async fn test_integration() {
-        let _server = Server::start(None);
+        let _ = env_logger::builder()
+            .filter_level(log::LevelFilter::Info)
+            .is_test(true)
+            .try_init();
+
+        let _server = Server::start(None).await;
 
         let proxy_client = ConnectProxyClient::new("http://localhost:8100");
 

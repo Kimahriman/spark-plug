@@ -80,7 +80,7 @@ class ConnectProxyClient:
         return spark
 
     def stop_application(self, app: Application):
-        self.session.delete(f"{self.url}/apps{app.id}").raise_for_status()
+        self.session.delete(f"{self.url}/apps/{app.id}").raise_for_status()
 
 
 class _ClientCallDetails(

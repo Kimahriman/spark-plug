@@ -248,7 +248,7 @@ async fn send_session_message(address: &str, token: &str, message: &str) -> anyh
         .header("TE", "trailers")
         .send()
         .await?;
-    info!("Stop session response: {res:?}");
+
     res.error_for_status()?;
     Ok(())
 }

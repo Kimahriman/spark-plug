@@ -7,6 +7,7 @@ import org.apache.spark.internal.config.ConfigBuilder
 object Config {
 
   var lastActive = System.currentTimeMillis()
+  var externalShutdown = false
 
   def updateLastActive() = {
     lastActive = System.currentTimeMillis()

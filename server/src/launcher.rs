@@ -4,7 +4,6 @@ use std::{
     env,
     io::{self},
     path::{Path, PathBuf},
-    // process::Stdio,
 };
 
 use log::info;
@@ -185,8 +184,8 @@ impl Launcher {
             .args(args)
             .envs(env)
             // .env("SPARK_HOME", &version.home)
-            // .stdout(Stdio::piped())
-            // .stderr(Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
             .spawn()?;
         Ok(())
     }

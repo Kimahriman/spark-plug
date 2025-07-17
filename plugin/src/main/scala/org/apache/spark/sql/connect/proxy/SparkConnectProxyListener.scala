@@ -44,8 +44,6 @@ class SparkConnectProxyListener(conf: SparkConf) extends SparkListener with Logg
 
   // lazy val client = HttpClient.newBuilder().sslContext(sslContext).build()
 
-  lazy val client = HttpClient.newHttpClient()
-
   override def onOtherEvent(event: SparkListenerEvent): Unit = {
     Config.updateLastActive()
 
@@ -66,6 +64,7 @@ class SparkConnectProxyListener(conf: SparkConf) extends SparkListener with Logg
         logInfo(s"Sending callback info to ${request.uri()}")
 
         try {
+          val client = HttpClient.newHttpClient()
           val response = client.send(request, BodyHandlers.discarding())
 
           if (response.statusCode() != 200) {
@@ -79,7 +78,7 @@ class SparkConnectProxyListener(conf: SparkConf) extends SparkListener with Logg
             SparkConnectService.stop()
           }
         }
-      case _: SparkListenerConnectServiceEnd =>
+      case _: SparkListenerConnectServiceEnd if !Config.externalShutdown =>
         val request = HttpRequest.newBuilder()
           .uri(URI.create(s"$callbackAddr/callback"))
           .timeout(Duration.of(10, SECONDS))
@@ -91,6 +90,7 @@ class SparkConnectProxyListener(conf: SparkConf) extends SparkListener with Logg
         logInfo(s"Sending callback delete to ${request.uri()}")
 
         try {
+          val client = HttpClient.newHttpClient()
           val response = client.send(request, BodyHandlers.discarding())
 
           if (response.statusCode() != 200) {

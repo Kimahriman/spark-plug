@@ -1,5 +1,6 @@
 use std::future::Future;
-use std::pin::Pin;
+use std::pin::{Pin, pin};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{fs, io};
@@ -7,6 +8,7 @@ use std::{fs, io};
 use axum::Router;
 use clap::{Parser, command};
 use config::{KerberosConfig, ProxyConfig};
+use futures::FutureExt;
 use http::StatusCode;
 use http::header::AUTHORIZATION;
 use hyper::body::Incoming;
@@ -14,14 +16,16 @@ use hyper::service::Service;
 use hyper::{Request, Response};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use routes::get_router;
 use rustls_pemfile::{certs, private_key};
 use sea_orm::{ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter};
 use sea_orm_migration::MigratorTrait;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio::process::Command;
-use tokio::sync::{mpsc, oneshot};
+use tokio::signal;
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio_rustls::TlsAcceptor;
 use tower::Service as TowerService;
 use which::which;
@@ -46,69 +50,157 @@ pub struct Args {
     pub config_file: Option<String>,
 }
 
-pub async fn run(config: ProxyConfig) -> Result<(), anyhow::Error> {
-    env_logger::Builder::new()
-        .filter_level(log::LevelFilter::Info)
-        .init();
+pub struct Server {
+    config: ProxyConfig,
+    router: Router,
+    db: DatabaseConnection,
+    tls_acceptor: Option<TlsAcceptor>,
+}
 
-    if let Some(kerberos_config) = config.kerberos_config.as_ref() {
-        kerberos_creds_task(kerberos_config.clone());
+impl Server {
+    pub async fn from_config(config: ProxyConfig) -> Result<Self, anyhow::Error> {
+        let store_url = config
+            .store
+            .as_ref()
+            .map(String::as_ref)
+            .unwrap_or("sqlite::memory:");
+        let db = Database::connect(store_url).await?;
+
+        let router = get_router(&config, db.clone()).await;
+
+        let tls_acceptor = load_tls_acceptor(&config)?;
+
+        Ok(Self {
+            config,
+            router,
+            db,
+            tls_acceptor,
+        })
     }
 
-    let bind_host = config.bind_host.clone().unwrap_or("0.0.0.0".to_string());
+    pub async fn run(self) -> Result<(), anyhow::Error> {
+        Migrator::up(&self.db, None).await?;
 
-    let bind_port = config.get_bind_port();
+        if let Some(kerberos_config) = self.config.kerberos_config.as_ref() {
+            kerberos_creds_task(kerberos_config.clone());
+        }
 
-    let listener = tokio::net::TcpListener::bind(format!("{bind_host}:{bind_port}")).await?;
+        let bind_host = self
+            .config
+            .bind_host
+            .clone()
+            .unwrap_or("0.0.0.0".to_string());
 
-    let store_url = config
-        .store
-        .as_ref()
-        .map(String::as_ref)
-        .unwrap_or("sqlite::memory:");
-    let db = Database::connect(store_url).await?;
-    Migrator::up(&db, None).await?;
+        let bind_port = self.config.get_bind_port();
 
-    let router = get_router(&config, db.clone()).await;
-    let tls_acceptor = load_tls_acceptor(&config)?;
+        let listener = tokio::net::TcpListener::bind(format!("{bind_host}:{bind_port}")).await?;
+        info!("Listening on http://{:?}", listener.local_addr().unwrap());
 
-    info!("Listening on http://{:?}", listener.local_addr().unwrap());
+        // For graceful shutdown, we use two pairs of watch channels. This is taken from the Axum implementation
+        // of graceful shutdown which we can't use since we don't use the serve function of Axum.
+        // - signal_*: The receiver is shutdown on a shutdown signal, which tells the senders the server is shutting
+        //             down. This tells running tasks and connections that they should gracefully shutdown.
+        // - close_*: The receivers are shutdown on connection completions, and the sender is the server itself
+        //            that waits for all receivers to finish, letting all existing connections finish their work
+        //            before shutting down the server.
+        let (signal_tx, signal_rx) = watch::channel(());
+        tokio::spawn(async move {
+            Self::shutdown_signal().await;
+            info!("Received shutdown signal. Telling tasks to shutdown.");
+            drop(signal_rx);
+        });
 
-    loop {
-        let (stream, _) = tokio::select! {
-            s = listener.accept() => s.unwrap(),
-            _ = tokio::signal::ctrl_c() => return Ok(())
-        };
+        let (close_tx, close_rx) = watch::channel(());
 
+        loop {
+            let (stream, _) = tokio::select! {
+                s = listener.accept() => s.unwrap(),
+                _ = signal_tx.closed() => {
+                    info!("Shutting down server");
+                    break;
+                }
+            };
+
+            if let Some(acceptor) = self.tls_acceptor.as_ref() {
+                self.serve_connection(acceptor.accept(stream).await?, &signal_tx, &close_rx);
+            } else {
+                self.serve_connection(stream, &signal_tx, &close_rx);
+            };
+        }
+
+        drop(close_rx);
+        drop(listener);
+
+        info!("Waiting for {} tasks to finish", close_tx.receiver_count());
+        close_tx.closed().await;
+
+        info!("All connections finished");
+
+        Ok(())
+    }
+
+    fn serve_connection<I>(
+        &self,
+        io: I,
+        signal_tx: &watch::Sender<()>,
+        close_rx: &watch::Receiver<()>,
+    ) where
+        I: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+    {
         info!("Serving new connection");
-        let router = router.clone();
-        let db = db.clone();
+        let router = self.router.clone();
+        let db = self.db.clone();
+        let signal_tx = signal_tx.clone();
+        let close_rx = close_rx.clone();
 
-        if let Some(acceptor) = tls_acceptor.as_ref() {
-            let io = TokioIo::new(acceptor.accept(stream).await?);
+        tokio::task::spawn(async move {
+            let builder = Builder::new(TokioExecutor::new());
+            let mut conn =
+                pin!(builder.serve_connection(TokioIo::new(io), ProxyService::new(router, db)));
 
-            tokio::task::spawn(async move {
-                // Serve via TLS
-                let result = Builder::new(TokioExecutor::new())
-                    .serve_connection(io, ProxyService::new(router, db))
-                    .await;
+            let mut signal_closed = pin!(signal_tx.closed().fuse());
 
-                if let Err(err) = result {
-                    error!("Error serving connection: {err:?}");
+            loop {
+                tokio::select! {
+                    result = conn.as_mut() => {
+                        if let Err(e) = result {
+                            error!("Error serving connection: {e:?}");
+                        }
+                        break;
+                    }
+                    _ = &mut signal_closed => {
+                        info!("Signal received in task, starting graceful shutdown");
+                        conn.as_mut().graceful_shutdown();
+                    }
                 }
-            });
-        } else {
-            tokio::task::spawn(async move {
-                // Serve unencrypted
-                let result = Builder::new(TokioExecutor::new())
-                    .serve_connection(TokioIo::new(stream), ProxyService::new(router, db))
-                    .await;
+            }
 
-                if let Err(err) = result {
-                    error!("Error serving connection: {err:?}");
-                }
-            });
+            drop(close_rx)
+        });
+    }
+
+    async fn shutdown_signal() {
+        let ctrl_c = async {
+            signal::ctrl_c()
+                .await
+                .expect("failed to install Ctrl+C handler");
         };
+
+        #[cfg(unix)]
+        let terminate = async {
+            signal::unix::signal(signal::unix::SignalKind::terminate())
+                .expect("failed to install signal handler")
+                .recv()
+                .await;
+        };
+
+        #[cfg(not(unix))]
+        let terminate = std::future::pending::<()>();
+
+        tokio::select! {
+            _ = ctrl_c => {},
+            _ = terminate => {},
+        }
     }
 }
 
@@ -161,8 +253,10 @@ async fn upstream_connection(
                 .unwrap();
             tokio::task::spawn(async move {
                 debug!("Spawned connection await");
-                if let Err(err) = conn.await {
-                    error!("Connection failed: {err:?}");
+                let res = conn.await;
+                debug!("Upstream connection closed: {res:?}");
+                if let Err(err) = res {
+                    warn!("Upstream connection failed: {err:?}");
                 }
             });
             Some((sender, address))
@@ -199,9 +293,15 @@ async fn upstream_connection(
                 .unwrap();
         }
     }
+
+    debug!("rx closed for upstream");
 }
 
+// Track ID for debugging purposes
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
 struct ProxyService {
+    id: u64,
     dispatch: Mutex<Option<mpsc::UnboundedSender<UpstreamMessage>>>,
     router: Router,
     db: DatabaseConnection,
@@ -209,7 +309,10 @@ struct ProxyService {
 
 impl ProxyService {
     fn new(router: Router, db: DatabaseConnection) -> Self {
+        let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+        debug!("Creating proxy service {id}");
         Self {
+            id,
             dispatch: Mutex::new(None),
             router,
             db,
@@ -280,6 +383,16 @@ impl Service<Request<hyper::body::Incoming>> for ProxyService {
             let mut router = self.router.clone();
             Box::pin(async move { Ok(router.call(req).await.unwrap()) })
         }
+    }
+}
+
+impl Drop for ProxyService {
+    fn drop(&mut self) {
+        debug!(
+            "Dropping proxy service {}: {}",
+            self.id,
+            self.dispatch.lock().unwrap().is_some()
+        );
     }
 }
 

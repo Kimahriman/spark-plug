@@ -20,6 +20,7 @@ class SparkConnectProxyInterceptor extends ServerInterceptor {
     Option(metadata.get(proxyMessageHeader)) match {
       case Some("stop") =>
         call.close(Status.CANCELLED, new Metadata())
+        Config.externalShutdown = true
         SparkConnectService.stop()
         new Listener[ReqT]() {}
       case Some(message) =>
