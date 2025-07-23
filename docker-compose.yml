@@ -3,13 +3,14 @@ version: '3.8'
 services:
   server:
     build:
-      context: .
+      dockerfile: dev/Dockerfile-server
     environment:
       HADOOP_CONF_DIR: /usr/src/app/dev
     volumes:
       - .:/usr/src/app
+      - cargo:/usr/local/cargo/registry/
       - staging:/staging
-    command: ["/opt/spark-connect-proxy/spark-connect-proxy", "-c", "/usr/src/app/conf/config.yaml"]
+    command: ["cargo", "run"]
     ports:
       - 8100:8100
 
@@ -61,4 +62,5 @@ services:
       - hadoop
 
 volumes:
+  cargo:
   staging:

@@ -59,10 +59,15 @@ pub struct ProxyConfig {
 }
 
 impl ProxyConfig {
-    pub fn from_file(path: impl AsRef<str>) -> Self {
-        Figment::new()
-            .merge(Yaml::file(path.as_ref()))
-            .merge(Env::prefixed("SPARK_CONNECT_PROXY_"))
+    pub fn create(path: Option<impl AsRef<str>>) -> Self {
+        let mut figment = Figment::new();
+
+        if let Some(path) = path {
+            figment = figment.merge(Yaml::file(path.as_ref()))
+        }
+
+        figment
+            .merge(Env::prefixed("CONNECT_PROXY_"))
             .extract()
             .unwrap()
     }

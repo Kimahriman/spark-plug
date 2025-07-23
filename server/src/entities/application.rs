@@ -3,6 +3,19 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Debug, EnumIter, DeriveActiveEnum, PartialEq, Eq, Serialize, Deserialize)]
+#[sea_orm(
+    rs_type = "String",
+    db_type = "String(StringLen::None)",
+    rename_all = "UPPERCASE"
+)]
+pub enum State {
+    LAUNCHING,
+    RUNNING,
+    FAILED,
+    FINISHED,
+}
+
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, Serialize, Deserialize)]
 #[sea_orm(table_name = "application")]
 pub struct Model {
@@ -10,6 +23,7 @@ pub struct Model {
     pub id: i32,
     pub created_at: DateTimeUtc,
     pub username: String,
+    pub state: State,
     pub token: String,
     pub address: Option<String>,
 }

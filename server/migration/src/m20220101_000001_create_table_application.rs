@@ -14,8 +14,12 @@ impl MigrationTrait for Migration {
                     .col(pk_auto(Application::Id))
                     .col(string(Application::Username))
                     .col(string(Application::Token))
+                    .col(string(Application::State))
                     .col(string_null(Application::Address))
-                    .col(timestamp_with_time_zone(Application::CreatedAt))
+                    .col(
+                        timestamp_with_time_zone(Application::CreatedAt)
+                            .default(Expr::current_timestamp()),
+                    )
                     .to_owned(),
             )
             .await?;
@@ -80,6 +84,7 @@ enum Application {
     Id,
     CreatedAt,
     Username,
+    State,
     Token,
     Address,
 }

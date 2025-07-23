@@ -8,10 +8,7 @@ pub async fn main() -> Result<(), anyhow::Error> {
         .init();
 
     let args = Args::parse();
-    let config = args
-        .config_file
-        .map(ProxyConfig::from_file)
-        .unwrap_or_default();
+    let config = ProxyConfig::create(args.config_file);
 
     Server::from_config(config).await?.run().await
 }

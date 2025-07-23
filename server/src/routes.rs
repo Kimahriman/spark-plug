@@ -10,8 +10,8 @@ use log::{error, info, warn};
 use migration::Expr;
 use reqwest::ClientBuilder;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
-    sqlx::types::chrono::Utc,
+    ActiveEnum, ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseConnection, EntityTrait,
+    QueryFilter,
 };
 use serde::{Deserialize, Serialize};
 use tower::ServiceBuilder;
@@ -66,6 +66,7 @@ struct CreateApplicationRequest {
 pub struct ApplicationInfo {
     id: i32,
     token: String,
+    state: String,
     active: bool,
 }
 
@@ -77,8 +78,9 @@ async fn create_app(
     let token = Uuid::new_v4().to_string();
 
     let app = application::ActiveModel {
-        created_at: ActiveValue::Set(Utc::now()),
+        // created_at: ActiveValue::Set(Utc::now()),
         username: ActiveValue::Set(user.0.clone()),
+        state: ActiveValue::Set(application::State::LAUNCHING),
         token: ActiveValue::Set(token.clone()),
         ..Default::default()
     };
@@ -87,7 +89,7 @@ async fn create_app(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    state
+    let launch = state
         .launcher
         .launch(
             params.version.as_ref().map(|v| v.as_ref()),
@@ -95,15 +97,50 @@ async fn create_app(
             token.clone(),
             params.config.unwrap_or_default(),
         )
-        .await
-        .map_err(|e| {
-            warn!("{e:?}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        .await;
+
+    match launch {
+        Ok(mut child) => {
+            let db = state.db.clone();
+            tokio::task::spawn(async move {
+                if child.wait().await.is_ok_and(|status| !status.success()) {
+                    let update_res = application::ActiveModel {
+                        id: ActiveValue::Set(res.id),
+                        state: ActiveValue::Set(application::State::FAILED),
+                        ..Default::default()
+                    }
+                    .update(&db)
+                    .await;
+
+                    if let Err(update_err) = update_res {
+                        warn!("Failed to set application state to failed: {update_err:?}");
+                    }
+                }
+            });
+        }
+        Err(e) => {
+            warn!("Failed to launch application: {e:?}");
+
+            let update_res = application::ActiveModel {
+                id: ActiveValue::Set(res.id),
+                state: ActiveValue::Set(application::State::FAILED),
+                ..Default::default()
+            }
+            .update(&state.db)
+            .await;
+
+            if let Err(update_err) = update_res {
+                warn!("Failed to set application state to failed: {update_err:?}");
+            }
+
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
 
     Ok(Json(ApplicationInfo {
         id: res.id,
         token,
+        state: res.state.to_value().to_string(),
         active: res.address.is_some(),
     }))
 }
@@ -127,6 +164,7 @@ async fn get_app(
     Ok(Json(ApplicationInfo {
         id: app.id,
         token: app.token,
+        state: app.state.to_value().to_string(),
         active: app.address.is_some(),
     }))
 }
@@ -198,6 +236,10 @@ async fn app_callback(
 
     let res = application::Entity::update_many()
         .col_expr(application::Column::Address, Expr::value(params.address))
+        .col_expr(
+            application::Column::State,
+            Expr::value(application::State::RUNNING),
+        )
         .filter(application::Column::Token.eq(token.0))
         .exec(&state.db)
         .await

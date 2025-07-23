@@ -9,7 +9,7 @@ use std::{
 
 use log::info;
 use tempfile::TempPath;
-use tokio::process::Command;
+use tokio::process::{Child, Command};
 use which::which;
 
 use crate::config::{ProxyConfig, SparkVersion};
@@ -137,7 +137,7 @@ impl Launcher {
         username: String,
         token: String,
         user_config: HashMap<String, String>,
-    ) -> Result<(), io::Error> {
+    ) -> Result<Child, io::Error> {
         let version = if let Some(name) = version_name {
             self.versions
                 .iter()
@@ -156,6 +156,7 @@ impl Launcher {
                 ))?
         };
 
+        #[allow(unused_mut)]
         let mut env = version.env.clone().unwrap_or_default();
 
         // Spark has trouble using the actual IP of the local host on Macs
@@ -228,13 +229,14 @@ impl Launcher {
 
         info!("Running {:?} {}", submit_path, args.join(" "));
 
-        Command::new(submit_path)
+        let child = Command::new(submit_path)
             .args(args)
             .envs(env)
             // .env("SPARK_HOME", &version.home)
             // .stdout(std::process::Stdio::piped())
             // .stderr(std::process::Stdio::piped())
             .spawn()?;
-        Ok(())
+
+        Ok(child)
     }
 }

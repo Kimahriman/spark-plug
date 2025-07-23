@@ -1,0 +1,18 @@
+FROM rust:1.88 AS rust-builder
+
+ARG TARGETPLATFORM
+ARG SPARK_VERSION=4.0.0
+
+RUN wget -q https://dlcdn.apache.org/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop3.tgz && \
+    tar -xf spark-${SPARK_VERSION}-bin-hadoop3.tgz -C /opt && \
+    rm -rf spark-${SPARK_VERSION}-bin-hadoop3.tgz && \
+    ln -s /opt/spark-${SPARK_VERSION}-bin-hadoop3 /opt/spark
+
+RUN apt-get update && \
+    apt-get install -y openjdk-17-jdk-headless && \
+    ln -s /usr/lib/jvm/java-17-openjdk-$(dpkg --print-architecture) /usr/lib/jvm/java-17-openjdk
+
+WORKDIR /usr/src/app
+
+ENV SPARK_HOME=/opt/spark
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk

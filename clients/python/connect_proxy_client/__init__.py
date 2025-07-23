@@ -42,12 +42,11 @@ class ConnectProxyClient:
 
         data = response.json()
 
-        while True:
+        while data["state"] == "LAUNCHING":
             response = self.session.get(f"{self.url}/apps/{data['id']}")
             response.raise_for_status()
 
-            if response.json()["active"]:
-                break
+            data = response.json()
             time.sleep(1)
 
         return Application.from_dict(data)
