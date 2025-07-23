@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use figment::{
     Figment,
-    providers::{Format, Yaml},
+    providers::{Env, Format, Yaml},
 };
 use local_ip_address::local_ip;
 use serde::Deserialize;
@@ -17,7 +17,8 @@ pub struct SparkVersion {
     pub home: String,
     pub default: bool,
     pub master: Option<String>,
-    pub proxy_user: bool,
+    pub deploy_mode: Option<String>,
+    pub proxy_user: Option<bool>,
     pub env: Option<HashMap<String, String>>,
     pub default_configs: Option<HashMap<String, String>>,
     pub merge_configs: Option<HashMap<String, String>>,
@@ -48,6 +49,7 @@ pub struct ProxyConfig {
     pub bind_host: Option<String>,
     pub bind_port: Option<u16>,
     pub callback_address: Option<String>,
+    pub plugin_path: Option<String>,
     pub session_timeout: Option<u32>,
     pub store: Option<String>,
     pub kerberos_config: Option<KerberosConfig>,
@@ -60,6 +62,7 @@ impl ProxyConfig {
     pub fn from_file(path: impl AsRef<str>) -> Self {
         Figment::new()
             .merge(Yaml::file(path.as_ref()))
+            .merge(Env::prefixed("SPARK_CONNECT_PROXY_"))
             .extract()
             .unwrap()
     }

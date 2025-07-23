@@ -4,8 +4,12 @@ services:
   server:
     build:
       context: .
+    environment:
+      HADOOP_CONF_DIR: /usr/src/app/dev
     volumes:
       - .:/usr/src/app
+      - staging:/staging
+    command: ["/opt/spark-connect-proxy/spark-connect-proxy", "-c", "/usr/src/app/conf/config.yaml"]
     ports:
       - 8100:8100
 
@@ -16,6 +20,8 @@ services:
       POSTGRES_PASSWORD: postgres
     ports:
       - 5432:5432
+    profiles:
+      - db
 
   keycloak:
     image: quay.io/keycloak/keycloak:26.3.1
@@ -25,3 +31,34 @@ services:
     ports:
       - 8080:8080
     command: ["start-dev"]
+    profiles:
+      - keycloak
+
+  resourcemanager:
+    build:
+      dockerfile: dev/Dockerfile-hadoop
+    ports:
+      - 8088:8088
+    volumes:
+      - ./dev/yarn-site.xml:/opt/hadoop-3.4.1/etc/hadoop/yarn-site.xml
+      - staging:/staging
+    hostname: resourcemanager
+    command: ["yarn", "resourcemanager"]
+    profiles:
+      - hadoop
+
+  nodemanager:
+    build:
+      dockerfile: dev/Dockerfile-hadoop
+    ports:
+      - 8042:8042
+    volumes:
+      - ./dev/yarn-site.xml:/opt/hadoop-3.4.1/etc/hadoop/yarn-site.xml
+      - staging:/staging
+    hostname: nodemanager
+    command: ["yarn", "nodemanager"]
+    profiles:
+      - hadoop
+
+volumes:
+  staging:

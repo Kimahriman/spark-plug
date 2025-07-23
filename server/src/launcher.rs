@@ -2,11 +2,13 @@
 use std::{
     collections::HashMap,
     env,
-    io::{self},
+    io::{self, Write},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use log::info;
+use tempfile::TempPath;
 use tokio::process::Command;
 use which::which;
 
@@ -17,12 +19,22 @@ static TOKEN_CONFIG: &str = "spark.connect.authenticate.token";
 static CALLBACK_CONFIG: &str = "spark.connect.proxy.callback";
 static TIMEOUT_CONFIG: &str = "spark.connect.proxy.idle.timeout";
 
+#[cfg(feature = "embed-plugin")]
+static PLUGIN_BINARY: Option<&[u8]> = Some(include_bytes!(
+    "../../plugin/target/scala-2.13/spark-connect-proxy_2.13-0.1.0.jar"
+));
+#[cfg(not(feature = "embed-plugin"))]
+static PLUGIN_BINARY: Option<&[u8]> = None;
+
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct Launcher {
     // Map of Spark version key to path it's located at
     versions: Vec<SparkVersion>,
     callback_addr: String,
     session_timeout: u32,
+    plugin_path: String,
+    plugin_temp_path: Option<Arc<TempPath>>,
 }
 
 impl Launcher {
@@ -74,10 +86,44 @@ impl Launcher {
             );
         }
 
+        let (plugin_path, plugin_temp_path) = PLUGIN_BINARY
+            .map(|content| {
+                let mut plugin_file = tempfile::Builder::new()
+                    .prefix("spark-connect-proxy-plugin")
+                    .suffix(".jar")
+                    .tempfile()
+                    .expect("Failed to create temporary file for plugin");
+                plugin_file
+                    .write_all(content)
+                    .expect("Failed to write plugin binary to temporary file");
+                plugin_file
+                    .flush()
+                    .expect("Failed to flush plugin binary to temporary file");
+
+                let plugin_temp_path = plugin_file.into_temp_path();
+                (
+                    plugin_temp_path.to_string_lossy().to_string(),
+                    Some(plugin_temp_path),
+                )
+            })
+            .unwrap_or_else(|| {
+                (
+                    config.plugin_path.clone().unwrap_or(format!(
+                        "{}/../plugin/target/scala-2.13/spark-connect-proxy_2.13-0.1.0.jar",
+                        env!("CARGO_MANIFEST_DIR")
+                    )),
+                    None,
+                )
+            });
+
+        info!("Using plugin at {plugin_path}");
+
         Self {
             versions,
             callback_addr,
             session_timeout: config.session_timeout.unwrap_or(3600),
+            plugin_path,
+            plugin_temp_path: plugin_temp_path.map(Arc::new),
         }
     }
 
@@ -155,10 +201,15 @@ impl Launcher {
 
         let submit_path = PathBuf::from(&version.home).join("bin/spark-submit");
 
-        let mut args = vec![
-            "--master".to_string(),
-            version.master.clone().unwrap_or("local".to_string()),
-        ];
+        let mut args = vec![];
+
+        if let Some(master) = version.master.as_ref() {
+            args.extend(["--master".to_string(), master.clone()]);
+        }
+
+        if let Some(deploy_mode) = version.deploy_mode.as_ref() {
+            args.extend(["--deploy-mode".to_string(), deploy_mode.clone()]);
+        }
 
         for (key, value) in configs.iter() {
             args.extend(["--conf".to_string(), format!("{key}={value}")]);
@@ -169,14 +220,11 @@ impl Launcher {
             "org.apache.spark.sql.connect.proxy.SparkConnectProxyServer".to_string(),
         ]);
 
-        if version.proxy_user {
+        if version.proxy_user.unwrap_or_default() {
             args.extend(["--proxy-user".to_string(), username]);
         }
 
-        args.push(format!(
-            "{}/../plugin/target/scala-2.13/spark-connect-proxy_2.13-0.1.0.jar",
-            env!("CARGO_MANIFEST_DIR")
-        ));
+        args.push(self.plugin_path.clone());
 
         info!("Running {:?} {}", submit_path, args.join(" "));
 
@@ -184,8 +232,8 @@ impl Launcher {
             .args(args)
             .envs(env)
             // .env("SPARK_HOME", &version.home)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            // .stdout(std::process::Stdio::piped())
+            // .stderr(std::process::Stdio::piped())
             .spawn()?;
         Ok(())
     }

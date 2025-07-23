@@ -28,7 +28,7 @@ RUN --mount=type=cache,target=/root/.cache/coursier \
 
 FROM cgr.dev/chainguard/wolfi-base AS base
 
-RUN apk add openjdk-17-jre wget
+RUN apk add openjdk-17-jre wget bash
 
 WORKDIR /opt/spark-connect-proxy
 
@@ -37,7 +37,9 @@ COPY --from=java-builder /usr/src/app/plugin/target/scala-2.13/spark-connect-pro
 
 CMD ["/opt/spark-connect-proxy/spark-connect-proxy"]
 
-FROM base
+FROM cgr.dev/chainguard/wolfi-base AS spark-cache
+
+RUN apk add wget
 
 ARG SPARK_VERSION=4.0.0
 
@@ -45,4 +47,11 @@ RUN wget -q https://dlcdn.apache.org/spark/spark-${SPARK_VERSION}/spark-${SPARK_
     tar -xf spark-${SPARK_VERSION}-bin-hadoop3.tgz -C /opt && \
     rm -rf spark-${SPARK_VERSION}-bin-hadoop3.tgz
 
-ENV SPARK_HOME=/opt/spark-${SPARK_VERSION}-bin-hadoop3
+FROM base
+
+ARG SPARK_VERSION=4.0.0
+
+COPY --from=spark-cache /opt/spark-${SPARK_VERSION}-bin-hadoop3 /opt/spark
+
+ENV SPARK_HOME=/opt/spark
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk

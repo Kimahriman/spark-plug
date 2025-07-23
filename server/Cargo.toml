@@ -13,7 +13,7 @@ base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
 dotenvy = "0.15"
 env_logger = "0.11"
-figment = { version = "0.10", features = ["json", "yaml"] }
+figment = { version = "0.10", features = ["env", "json", "yaml"] }
 futures = "0.3"
 futures-util = "0.3"
 http = "1"
@@ -32,6 +32,7 @@ rustls-pki-types = "1"
 sea-orm = { version = "1", features = ["sqlx-all", "sqlite-use-returning-for-3_35", "runtime-tokio-rustls"] }
 sea-orm-migration = { version = "1.1.13", features = ["runtime-tokio-rustls", "sqlx-postgres", "sqlx-mysql", "sqlx-sqlite"] }
 serde = { version = "1", features = ["derive"] }
+tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
@@ -46,4 +47,6 @@ migration = { path = "./migration" }
 [dev-dependencies]
 rcgen = "0.14"
 spark-connect-proxy-client = { path = "../clients/rust" }
-tempfile = "3"
+
+[features]
+embed-plugin = []
