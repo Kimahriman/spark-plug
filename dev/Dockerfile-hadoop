@@ -5,7 +5,7 @@ ARG HADOOP_VERSION=3.4.1
 RUN apt-get update && \
     apt-get install -y wget openjdk-11-jre-headless openjdk-17-jre-headless
 
-RUN wget https://dlcdn.apache.org/hadoop/common/hadoop-${HADOOP_VERSION}/hadoop-${HADOOP_VERSION}-lean.tar.gz && \
+RUN wget -q https://dlcdn.apache.org/hadoop/common/hadoop-${HADOOP_VERSION}/hadoop-${HADOOP_VERSION}-lean.tar.gz && \
     tar -xf hadoop-${HADOOP_VERSION}-lean.tar.gz -C /opt && \
     rm hadoop-${HADOOP_VERSION}-lean.tar.gz && \
     ln -s /opt/hadoop-${HADOOP_VERSION} /opt/hadoop

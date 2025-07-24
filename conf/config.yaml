@@ -1,6 +1,6 @@
 # callback_address: http://127.0.0.1:8100
 # store: postgres://postgres:postgres@localhost/postgres
-plugin_path: /usr/src/app/plugin/target/scala-2.13/spark-connect-proxy_2.13-0.1.0.jar
+# plugin_path: /usr/src/app/plugin/target/scala-2.13/spark-connect-proxy_2.13-0.1.0.jar
 # auth_methods:
 #   - name: jwks
 #     options:

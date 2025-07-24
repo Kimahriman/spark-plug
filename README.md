@@ -1,6 +1,6 @@
 # Spark Connect Proxy
 
-Spark Connect Proxy serves as both an API for creating remote Spark sessions and a proxy for accessing remote Spark sessions in a distributed compute environment such as YARN.
+Spark Connect Proxy serves as both an API for creating remote Spark sessions and a proxy for accessing remote [Spark Connect](https://spark.apache.org/docs/latest/spark-connect-overview.html) sessions in a distributed compute environment such as YARN.
 
 Spark Connect provides a new way to interact with Spark sessions remotely, but has may limitations preventing it from being usable in a secure, multi-tenant, distributed compute environment:
 - There is no built-in authentication mechanism. Any session started in a remote cluster accessible by other users can be connected to by any other user that knows about it. Spark documentation suggests using external proxies to enforce security, but this is not possible in flat distributed compute environments such as YARN.

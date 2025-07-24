@@ -232,8 +232,6 @@ async fn app_callback(
     Extension(token): Extension<BearerToken>,
     Json(params): Json<ApplicationCallbackRequest>,
 ) -> Result<(), StatusCode> {
-    info!("Got the callback for {}", token.0);
-
     let res = application::Entity::update_many()
         .col_expr(application::Column::Address, Expr::value(params.address))
         .col_expr(

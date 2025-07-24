@@ -10,7 +10,7 @@ services:
       - .:/usr/src/app
       - cargo:/usr/local/cargo/registry/
       - staging:/staging
-    command: ["cargo", "run"]
+    command: ["cargo", "run", "--", "-c", "conf/config.yaml"]
     ports:
       - 8100:8100
 
@@ -36,6 +36,7 @@ services:
       - keycloak
 
   resourcemanager:
+    image: spark-connect-proxy-hadoop
     build:
       dockerfile: dev/Dockerfile-hadoop
     ports:
@@ -49,6 +50,7 @@ services:
       - hadoop
 
   nodemanager:
+    image: spark-connect-proxy-hadoop
     build:
       dockerfile: dev/Dockerfile-hadoop
     ports:
@@ -58,6 +60,23 @@ services:
       - staging:/staging
     hostname: nodemanager
     command: ["yarn", "nodemanager"]
+    profiles:
+      - hadoop
+
+  knox:
+    build:
+      dockerfile: dev/Dockerfile-knox
+    environment:
+      KNOX_GATEWAY_RUNNING_IN_FOREGROUND: "true"
+    ports:
+      - 8443:8443
+    volumes:
+      - ./dev/knox/knox-entrypoint.sh:/entrypoint.sh
+      - ./dev/knox/topologies:/opt/knox/conf/topologies
+      - ./dev/knox/gateway-log4j2.xml:/opt/knox/conf/gateway-log4j2.xml
+      - ./dev/knox/gateway-site.xml:/opt/knox/conf/gateway-site.xml
+    entrypoint: ["/entrypoint.sh"]
+    command: ["./bin/gateway.sh", "start"]
     profiles:
       - hadoop
 

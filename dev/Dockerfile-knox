@@ -1,0 +1,21 @@
+FROM ubuntu:noble
+
+RUN useradd -M knox
+
+ARG KNOX_VERSION=2.0.0
+
+RUN apt-get update && \
+    apt-get install -y wget openjdk-8-jre-headless unzip && \
+    ln -s /usr/lib/jvm/java-8-openjdk-$(dpkg --print-architecture) /usr/lib/jvm/java-8-openjdk
+
+RUN wget https://dlcdn.apache.org/knox/2.0.0/knox-2.0.0.zip && \
+    unzip knox-2.0.0.zip && \
+    rm knox-2.0.0.zip && \
+    mv knox-2.0.0 /opt/knox && \
+    chown -R knox /opt/knox
+
+WORKDIR /opt/knox
+USER knox
+
+ENV JAVA_HOME=/usr/lib/jvm/java-8-openjdk
+ENV PATH=${PATH}:/opt/knox/bin
