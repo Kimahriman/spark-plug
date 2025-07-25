@@ -111,7 +111,10 @@ class SparkConnectProxyListener(conf: SparkConf) extends SparkListener with Logg
     val timeoutThread = new Thread(new Runnable() {
       override def run(): Unit = {
         while (true) {
-          if (Config.lastActive < (System.currentTimeMillis() - timeout * 1000)) {
+          if (SparkConnectService.listActiveExecutions.isRight) {
+            Config.updateLastActive()
+          } else if (Config.lastActive < (System.currentTimeMillis() - timeout * 1000)) {
+            logInfo(s"Application has been idle for $timeout seconds, shutting down")
             SparkConnectService.stop()
             return
           }

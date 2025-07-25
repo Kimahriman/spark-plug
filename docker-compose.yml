@@ -41,6 +41,7 @@ services:
       dockerfile: dev/Dockerfile-hadoop
     ports:
       - 8088:8088
+      - 8030-8033:8030-8033
     volumes:
       - ./dev/yarn-site.xml:/opt/hadoop-3.4.1/etc/hadoop/yarn-site.xml
       - staging:/staging
@@ -63,7 +64,8 @@ services:
     profiles:
       - hadoop
 
-  knox:
+  # Uses internal image based on 2.0.0 release
+  knox-custom:
     build:
       dockerfile: dev/Dockerfile-knox
     environment:
@@ -78,7 +80,21 @@ services:
     entrypoint: ["/entrypoint.sh"]
     command: ["./bin/gateway.sh", "start"]
     profiles:
-      - hadoop
+      - knox-custom
+
+  # Used to test master Knox code
+  # To build this, run `mvn -Ppackage -Pdocker clean install -DskipTests -Ddocker.platforms=""`
+  # Needs Java 8 to build
+  knox-master:
+    image: knox-gateway:2.1.0-SNAPSHOT
+    ports:
+      - 8443:8443
+    volumes:
+      - ./dev/knox/topologies:/home/knox/knox/conf/topologies
+      - ./dev/knox/gateway-log4j2.xml:/home/knox/knox/conf/gateway-log4j2.xml
+      - ./dev/knox/gateway-site.xml:/home/knox/knox/conf/gateway-site.xml
+    profiles:
+      - knox-master
 
 volumes:
   cargo:
