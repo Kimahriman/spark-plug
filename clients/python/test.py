@@ -1,16 +1,19 @@
-import time
-
+import requests
 from connect_proxy_client import ConnectProxyClient
 
-client = ConnectProxyClient("http://localhost:8100")
+session = requests.Session()
+
+client = ConnectProxyClient("http://localhost:8100", session)
 
 app = client.create_application()
 
-spark = client.create_session(app)
-spark.range(5).show()
+try:
+    spark = client.create_session(app)
 
-time.sleep(10)
+    spark.range(5).show()
 
-spark.stop()
+    input()
 
-client.stop_application(app)
+    spark.stop()
+finally:
+    client.stop_application(app)

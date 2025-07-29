@@ -3,7 +3,7 @@ use std::{
     collections::HashMap,
     env,
     io::{self, Write},
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::Arc,
 };
 
@@ -26,9 +26,21 @@ static PLUGIN_BINARY: Option<&[u8]> = Some(include_bytes!(
 #[cfg(not(feature = "embed-plugin"))]
 static PLUGIN_BINARY: Option<&[u8]> = None;
 
+pub trait Launcher: Clone + Send + Sync {
+    fn get_versions(&self) -> Vec<String>;
+
+    fn launch(
+        &self,
+        version_name: Option<&str>,
+        username: String,
+        token: String,
+        user_config: HashMap<String, String>,
+    ) -> Result<Child, io::Error>;
+}
+
 #[derive(Clone)]
 #[allow(dead_code)]
-pub struct Launcher {
+pub struct SparkLauncher {
     // Map of Spark version key to path it's located at
     versions: Vec<SparkVersion>,
     callback_addr: String,
@@ -37,7 +49,7 @@ pub struct Launcher {
     plugin_temp_path: Option<Arc<TempPath>>,
 }
 
-impl Launcher {
+impl SparkLauncher {
     pub fn from_config(config: &ProxyConfig) -> Self {
         let versions = config.spark_versions.clone().unwrap_or_else(|| {
             // Check if SPARK_HOME is defined and use that as the default
@@ -63,7 +75,7 @@ impl Launcher {
                     ..Default::default()
                 }]
             } else {
-                panic!("Unable to find a default Spark installation")
+                panic!("Unable to find a default Spark installation");
             }
         });
         let callback_addr = config.get_callback_addr();
@@ -79,7 +91,7 @@ impl Launcher {
         // Check all the Spark directories exist
         for version in versions.iter() {
             assert!(
-                Path::new(&version.home).exists(),
+                std::path::Path::new(&version.home).exists(),
                 "Home directory not found for version {}: {}",
                 version.name,
                 version.home
@@ -126,12 +138,14 @@ impl Launcher {
             plugin_temp_path: plugin_temp_path.map(Arc::new),
         }
     }
+}
 
-    pub fn get_versions(&self) -> Vec<String> {
+impl Launcher for SparkLauncher {
+    fn get_versions(&self) -> Vec<String> {
         self.versions.iter().map(|v| v.name.clone()).collect()
     }
 
-    pub async fn launch(
+    fn launch(
         &self,
         version_name: Option<&str>,
         username: String,

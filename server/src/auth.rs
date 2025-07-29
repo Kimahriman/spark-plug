@@ -27,11 +27,11 @@ fn extract_bearer_token(header_map: &HeaderMap) -> Result<Option<&str>> {
         .map(|h| (&h[7..])))
 }
 
-trait UserAuthMethod: Sync + Send {
+pub(crate) trait UserAuthMethod: Sync + Send {
     fn authorize_user(&self, header_map: &HeaderMap) -> Result<Option<String>>;
 }
 
-struct CurrentUserAuth {}
+pub(crate) struct CurrentUserAuth {}
 
 impl UserAuthMethod for CurrentUserAuth {
     fn authorize_user(&self, _: &HeaderMap) -> Result<Option<String>> {
@@ -44,8 +44,8 @@ impl UserAuthMethod for CurrentUserAuth {
 /// This assumes the user has already been authenticated by an upstream proxy
 /// which is simply passing their username along.
 ///
-struct RemoteUserAuth {
-    header: String,
+pub(crate) struct RemoteUserAuth {
+    pub header: String,
 }
 
 impl RemoteUserAuth {
@@ -180,13 +180,12 @@ impl UserAuthMethod for JWKSAuth {
 }
 
 #[derive(Clone)]
-pub struct UserAuth {
-    auth_methods: Vec<Arc<dyn UserAuthMethod>>,
+pub(crate) struct UserAuth {
+    pub auth_methods: Vec<Arc<dyn UserAuthMethod>>,
 }
 
 impl UserAuth {
-    #[allow(clippy::vec_init_then_push)]
-    pub(crate) async fn new(config: &ProxyConfig) -> Self {
+    pub(crate) async fn from_config(config: &ProxyConfig) -> Self {
         let mut auth_methods = Vec::<Arc<dyn UserAuthMethod>>::new();
 
         let default_options = HashMap::new();

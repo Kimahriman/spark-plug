@@ -24,4 +24,8 @@
         <role>YARNUI</role>
         <url>http://resourcemanager:8088</url>
     </service>
+    <service>
+        <role>YARNUIV2</role>
+        <url>http://resourcemanager:8088</url>
+    </service>
 </topology>

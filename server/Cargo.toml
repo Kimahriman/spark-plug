@@ -45,6 +45,7 @@ whoami = "1"
 migration = { path = "./migration" }
 
 [dev-dependencies]
+axum-test = "17.3.0"
 rcgen = "0.14"
 spark-connect-proxy-client = { path = "../clients/rust" }
 

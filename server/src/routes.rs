@@ -6,7 +6,7 @@ use axum::{
     routing::{get, post},
 };
 use http::StatusCode;
-use log::{error, info, warn};
+use log::{error, warn};
 use migration::Expr;
 use reqwest::ClientBuilder;
 use sea_orm::{
@@ -20,26 +20,28 @@ use uuid::Uuid;
 
 use crate::{
     auth::{BearerToken, TokenAuth, UserAuth, UserId},
-    config::ProxyConfig,
     entities::application,
     launcher::Launcher,
 };
 
-pub async fn get_router(config: &ProxyConfig, db: DatabaseConnection) -> Router {
+pub(crate) async fn get_router<L>(
+    user_auth: UserAuth,
+    launcher: L,
+    db: DatabaseConnection,
+) -> Router
+where
+    L: Launcher + 'static,
+{
     let app_state = AppStateDyn {
         db,
-        launcher: Arc::new(Launcher::from_config(config)),
+        launcher: Arc::new(launcher),
     };
 
     let user_api = Router::new()
         .route("/apps", get(list_apps).post(create_app))
         .route("/apps/{app_id}", get(get_app).delete(delete_app))
         .route("/versions", get(list_versions))
-        .route_layer(
-            ServiceBuilder::new().layer(AsyncRequireAuthorizationLayer::new(
-                UserAuth::new(config).await,
-            )),
-        )
+        .route_layer(ServiceBuilder::new().layer(AsyncRequireAuthorizationLayer::new(user_auth)))
         .with_state(app_state.clone());
 
     let callback_api = Router::new()
@@ -51,18 +53,18 @@ pub async fn get_router(config: &ProxyConfig, db: DatabaseConnection) -> Router 
 }
 
 #[derive(Clone)]
-struct AppStateDyn {
+struct AppStateDyn<L: Launcher + 'static> {
     db: DatabaseConnection,
-    launcher: Arc<Launcher>,
+    launcher: Arc<L>,
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Serialize, Deserialize)]
 struct CreateApplicationRequest {
     version: Option<String>,
     config: Option<HashMap<String, String>>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct ApplicationInfo {
     id: i32,
     token: String,
@@ -70,8 +72,19 @@ pub struct ApplicationInfo {
     active: bool,
 }
 
-async fn create_app(
-    State(state): State<AppStateDyn>,
+impl From<application::Model> for ApplicationInfo {
+    fn from(value: application::Model) -> Self {
+        Self {
+            id: value.id,
+            token: value.token,
+            state: value.state.to_value().to_string(),
+            active: value.address.is_some(),
+        }
+    }
+}
+
+async fn create_app<L: Launcher>(
+    State(state): State<AppStateDyn<L>>,
     Extension(user): Extension<UserId>,
     Json(params): Json<CreateApplicationRequest>,
 ) -> Result<Json<ApplicationInfo>, StatusCode> {
@@ -89,21 +102,18 @@ async fn create_app(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let launch = state
-        .launcher
-        .launch(
-            params.version.as_ref().map(|v| v.as_ref()),
-            user.0,
-            token.clone(),
-            params.config.unwrap_or_default(),
-        )
-        .await;
+    let launch = state.launcher.launch(
+        params.version.as_ref().map(|s| s.as_ref()),
+        user.0,
+        token,
+        params.config.unwrap_or_default(),
+    );
 
     match launch {
         Ok(mut child) => {
             let db = state.db.clone();
             tokio::task::spawn(async move {
-                if child.wait().await.is_ok_and(|status| !status.success()) {
+                if child.wait().await.map(|s| !s.success()).unwrap_or(false) {
                     let update_res = application::ActiveModel {
                         id: ActiveValue::Set(res.id),
                         state: ActiveValue::Set(application::State::FAILED),
@@ -137,16 +147,11 @@ async fn create_app(
         }
     }
 
-    Ok(Json(ApplicationInfo {
-        id: res.id,
-        token,
-        state: res.state.to_value().to_string(),
-        active: res.address.is_some(),
-    }))
+    Ok(Json(res.into()))
 }
 
-async fn get_app(
-    State(state): State<AppStateDyn>,
+async fn get_app<L: Launcher>(
+    State(state): State<AppStateDyn<L>>,
     Path(app_id): Path<i32>,
     Extension(user): Extension<UserId>,
 ) -> Result<Json<ApplicationInfo>, StatusCode> {
@@ -161,18 +166,13 @@ async fn get_app(
         })?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    Ok(Json(ApplicationInfo {
-        id: app.id,
-        token: app.token,
-        state: app.state.to_value().to_string(),
-        active: app.address.is_some(),
-    }))
+    Ok(Json(app.into()))
 }
 
-async fn list_apps(
-    State(state): State<AppStateDyn>,
+async fn list_apps<L: Launcher>(
+    State(state): State<AppStateDyn<L>>,
     Extension(user): Extension<UserId>,
-) -> Result<Json<Vec<application::Model>>, StatusCode> {
+) -> Result<Json<Vec<ApplicationInfo>>, StatusCode> {
     let apps = application::Entity::find()
         .filter(application::Column::Username.eq(user.0))
         .all(&state.db)
@@ -181,11 +181,11 @@ async fn list_apps(
             error!("Failed to get applications from db: {e:?}");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
-    Ok(Json(apps))
+    Ok(Json(apps.into_iter().map(Into::into).collect()))
 }
 
-async fn delete_app(
-    State(state): State<AppStateDyn>,
+async fn delete_app<L: Launcher>(
+    State(state): State<AppStateDyn<L>>,
     Path(app_id): Path<i32>,
     Extension(user): Extension<UserId>,
 ) -> Result<(), StatusCode> {
@@ -218,17 +218,17 @@ async fn delete_app(
     }
 }
 
-async fn list_versions(State(state): State<AppStateDyn>) -> Json<Vec<String>> {
+async fn list_versions<L: Launcher>(State(state): State<AppStateDyn<L>>) -> Json<Vec<String>> {
     Json(state.launcher.get_versions())
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct ApplicationCallbackRequest {
     address: String,
 }
 
-async fn app_callback(
-    State(state): State<AppStateDyn>,
+async fn app_callback<L: Launcher>(
+    State(state): State<AppStateDyn<L>>,
     Extension(token): Extension<BearerToken>,
     Json(params): Json<ApplicationCallbackRequest>,
 ) -> Result<(), StatusCode> {
@@ -253,18 +253,24 @@ async fn app_callback(
     }
 }
 
-async fn app_callback_delete(
-    State(state): State<AppStateDyn>,
+async fn app_callback_delete<L: Launcher>(
+    State(state): State<AppStateDyn<L>>,
     Extension(token): Extension<BearerToken>,
 ) -> Result<(), StatusCode> {
-    info!("Got the delete callback for {}", token.0);
-
-    let res = application::Entity::delete_many()
+    let res = application::Entity::update_many()
+        .col_expr(
+            application::Column::Address,
+            Expr::value::<Option<String>>(None),
+        )
+        .col_expr(
+            application::Column::State,
+            Expr::value(application::State::FINISHED),
+        )
         .filter(application::Column::Token.eq(token.0))
         .exec(&state.db)
         .await
         .map_err(|e| {
-            error!("Failed to delete app from db: {e:?}");
+            error!("Failed to mark app as finished: {e:?}");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
@@ -291,4 +297,144 @@ async fn send_session_message(address: &str, token: &str, message: &str) -> anyh
 
     res.error_for_status()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use std::sync::Arc;
+
+    use axum_test::TestServer;
+    use http::StatusCode;
+    use migration::{Migrator, MigratorTrait};
+    use sea_orm::Database;
+
+    use crate::{
+        auth::{CurrentUserAuth, RemoteUserAuth, UserAuth},
+        launcher::Launcher,
+        routes::{
+            ApplicationCallbackRequest, ApplicationInfo, CreateApplicationRequest, get_router,
+        },
+    };
+
+    #[derive(Clone)]
+    struct MockLauncher {}
+
+    impl Launcher for MockLauncher {
+        fn get_versions(&self) -> Vec<String> {
+            vec!["4.0.0".to_string()]
+        }
+
+        fn launch(
+            &self,
+            _version_name: Option<&str>,
+            _username: String,
+            _token: String,
+            _user_config: std::collections::HashMap<String, String>,
+        ) -> Result<tokio::process::Child, std::io::Error> {
+            tokio::process::Command::new("true").spawn()
+        }
+    }
+
+    async fn create_test_server() -> TestServer {
+        env_logger::Builder::new()
+            .filter(Some("spark_connect_proxy"), log::LevelFilter::Debug)
+            .is_test(true)
+            .init();
+
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        Migrator::up(&db, None).await.unwrap();
+        let router = get_router(
+            UserAuth {
+                auth_methods: vec![
+                    Arc::new(RemoteUserAuth {
+                        header: "REMOTE_USER".to_string(),
+                    }),
+                    Arc::new(CurrentUserAuth {}),
+                ],
+            },
+            MockLauncher {},
+            db,
+        )
+        .await;
+
+        TestServer::new(router).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_routes() {
+        let server = create_test_server().await;
+
+        server
+            .get("/apps")
+            .await
+            .assert_json::<Vec<ApplicationInfo>>(&vec![]);
+
+        let res = server
+            .post("/apps")
+            .json(&CreateApplicationRequest::default())
+            .await;
+
+        res.assert_status(StatusCode::OK);
+        let app = res.json::<ApplicationInfo>();
+
+        server
+            .get(&format!("/apps/{}", app.id))
+            .await
+            .assert_json(&app);
+
+        server
+            .post("/callback")
+            .authorization_bearer(app.token)
+            .json(&ApplicationCallbackRequest {
+                address: "localhost:12345".to_string(),
+            })
+            .await
+            .assert_status(StatusCode::OK);
+
+        let res = server.get(&format!("/apps/{}", app.id)).await;
+
+        res.assert_status(StatusCode::OK);
+        let app = res.json::<ApplicationInfo>();
+        assert!(app.active);
+        assert_eq!(app.state, "RUNNING");
+
+        server
+            .delete("/callback")
+            .authorization_bearer(app.token)
+            .await
+            .assert_status(StatusCode::OK);
+
+        let res = server.get(&format!("/apps/{}", app.id)).await;
+
+        res.assert_status(StatusCode::OK);
+        let app = res.json::<ApplicationInfo>();
+        assert!(!app.active);
+        assert_eq!(app.state, "FINISHED");
+    }
+
+    #[tokio::test]
+    async fn test_users() {
+        let server = create_test_server().await;
+
+        let res = server
+            .post("/apps")
+            .add_header("REMOTE_USER", "user1")
+            .json(&CreateApplicationRequest::default())
+            .await;
+
+        res.assert_status(StatusCode::OK);
+        let app = res.json::<ApplicationInfo>();
+
+        server
+            .get("/apps")
+            .add_header("REMOTE_USER", "user2")
+            .await
+            .assert_json::<Vec<ApplicationInfo>>(&vec![]);
+
+        server
+            .get("/apps")
+            .add_header("REMOTE_USER", "user1")
+            .await
+            .assert_json::<Vec<ApplicationInfo>>(&vec![app]);
+    }
 }

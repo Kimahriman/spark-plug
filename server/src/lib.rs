@@ -32,7 +32,9 @@ use which::which;
 
 use migration::Migrator;
 
-use crate::entities::application;
+use crate::auth::UserAuth;
+use crate::entities::application::{self, State};
+use crate::launcher::SparkLauncher;
 
 mod auth;
 pub mod config;
@@ -65,8 +67,10 @@ impl Server {
             .map(String::as_ref)
             .unwrap_or("sqlite::memory:");
         let db = Database::connect(store_url).await?;
+        let launcher = SparkLauncher::from_config(&config);
+        let user_auth = UserAuth::from_config(&config).await;
 
-        let router = get_router(&config, db.clone()).await;
+        let router = get_router(user_auth, launcher, db.clone()).await;
 
         let tls_acceptor = load_tls_acceptor(&config)?;
 
@@ -234,65 +238,75 @@ async fn upstream_connection(
     token: String,
     db: DatabaseConnection,
 ) {
-    let mut sender = {
-        let address = application::Entity::find()
-            .filter(application::Column::Token.eq(token))
-            .one(&db)
-            .await
-            .inspect_err(|e| error!("Failed to retrieve app by token: {e:?}"))
-            .ok()
-            .flatten()
-            .and_then(|app| app.address);
+    let (mut sender, address) = {
+        let address = loop {
+            if rx.is_closed() {
+                return;
+            }
 
-        if let Some(address) = address {
-            let client_stream = TcpStream::connect(&address).await.unwrap();
-            let io = TokioIo::new(client_stream);
-
-            let (sender, conn) = hyper::client::conn::http2::handshake(TokioExecutor::new(), io)
+            let app = match application::Entity::find()
+                .filter(application::Column::Token.eq(&token))
+                .one(&db)
                 .await
-                .unwrap();
-            tokio::task::spawn(async move {
-                debug!("Spawned connection await");
-                let res = conn.await;
-                debug!("Upstream connection closed: {res:?}");
-                if let Err(err) = res {
-                    warn!("Upstream connection failed: {err:?}");
+            {
+                Ok(Some(app)) => app,
+                Ok(None) => {
+                    error!("Failed to find application for token {token}");
+                    return;
                 }
-            });
-            Some((sender, address))
-        } else {
-            None
-        }
+                Err(e) => {
+                    error!("Failed to retrieve application by token: {e:?}");
+                    return;
+                }
+            };
+
+            match app.state {
+                State::RUNNING => break app.address.unwrap(),
+                State::LAUNCHING => tokio::time::sleep(Duration::from_secs(1)).await,
+                state => {
+                    error!("Cannot connect to an application in state {state:?}");
+                    return;
+                }
+            }
+        };
+
+        let client_stream = TcpStream::connect(&address).await.unwrap();
+        let io = TokioIo::new(client_stream);
+
+        let (sender, conn) = hyper::client::conn::http2::handshake(TokioExecutor::new(), io)
+            .await
+            .unwrap();
+        tokio::task::spawn(async move {
+            debug!("Spawned connection await");
+            let res = conn.await;
+            debug!("Upstream connection closed: {res:?}");
+            if let Err(err) = res {
+                warn!("Upstream connection failed: {err:?}");
+            }
+        });
+        (sender, address)
     };
 
     while let Some((mut req, tx)) = rx.recv().await {
-        if let Some((sender, address)) = sender.as_mut() {
-            let uri_string = format!(
-                "http://{address}{}",
-                req.uri()
-                    .path_and_query()
-                    .map(|x| x.as_str())
-                    .unwrap_or("/")
-            );
-            *req.uri_mut() = uri_string.parse().unwrap();
+        let uri_string = format!(
+            "http://{address}{}",
+            req.uri()
+                .path_and_query()
+                .map(|x| x.as_str())
+                .unwrap_or("/")
+        );
+        *req.uri_mut() = uri_string.parse().unwrap();
 
-            info!("Proxying request {:?}", req.uri().path_and_query());
+        info!("Proxying request {:?}", req.uri().path_and_query());
 
-            let response = sender
-                .send_request(req)
-                .await
-                .map(|response| response.map(axum::body::Body::new));
+        let response = sender
+            .send_request(req)
+            .await
+            .map(|response| response.map(axum::body::Body::new));
 
-            info!("Proxying response {response:?}");
+        info!("Proxying response {response:?}");
 
-            tx.send(response).unwrap();
-        } else {
-            tx.send(Ok(Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .body(().into())
-                .unwrap()))
-                .unwrap();
-        }
+        tx.send(response).unwrap();
     }
 
     debug!("rx closed for upstream");
@@ -358,8 +372,18 @@ impl ProxyService {
             );
             *dispatch = Some(upstream_sender);
         }
-        dispatch.as_mut().unwrap().send((req, tx)).unwrap();
-        rx
+
+        match dispatch.as_mut().unwrap().send((req, tx)) {
+            Ok(_) => rx,
+            Err(mpsc::error::SendError((_, tx))) => {
+                tx.send(Ok(Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body(().into())
+                    .unwrap()))
+                    .unwrap();
+                rx
+            }
+        }
     }
 }
 
@@ -379,7 +403,15 @@ impl Service<Request<hyper::body::Incoming>> for ProxyService {
             .starts_with("/spark.connect.SparkConnectService")
         {
             let rx = self.dispatch(req);
-            Box::pin(async move { Ok(rx.await.unwrap()?.map(axum::body::Body::new)) })
+            Box::pin(async move {
+                match rx.await {
+                    Ok(res) => Ok(res?.map(axum::body::Body::new)),
+                    Err(_) => Ok(Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body(().into())
+                        .unwrap()),
+                }
+            })
         } else {
             let mut router = self.router.clone();
             Box::pin(async move { Ok(router.call(req).await.unwrap()) })

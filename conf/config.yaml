@@ -1,4 +1,4 @@
-# callback_address: http://127.0.0.1:8100
+callback_address: http://127.0.0.1:8100
 # store: postgres://postgres:postgres@localhost/postgres
 # plugin_path: /usr/src/app/plugin/target/scala-2.13/spark-connect-proxy_2.13-0.1.0.jar
 # auth_methods:
@@ -6,13 +6,13 @@
 #     options:
 #       oidc_url: http://localhost:8080/realms/test/.well-known/openid-configuration
 #       audience: account
-spark_versions:
-  - name: "4.0.0"
-    home: /opt/spark
-    default: true
-    master: yarn
-    deploy_mode: cluster
-    default_configs:
-      spark.yarn.stagingDir: /staging
-      spark.yarn.appMasterEnv.JAVA_HOME: /usr/lib/jvm/java-17-openjdk-arm64
-      spark.executorEnv.JAVA_HOME: /usr/lib/jvm/java-17-openjdk-arm64
+# spark_versions:
+#   - name: "4.0.0"
+#     home: /opt/spark
+#     default: true
+#     master: yarn
+#     deploy_mode: cluster
+#     default_configs:
+#       spark.yarn.stagingDir: /staging
+#       spark.yarn.appMasterEnv.JAVA_HOME: /usr/lib/jvm/java-17-openjdk-arm64
+#       spark.executorEnv.JAVA_HOME: /usr/lib/jvm/java-17-openjdk-arm64

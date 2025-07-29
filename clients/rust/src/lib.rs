@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
 
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -48,24 +48,7 @@ impl ConnectProxyClient {
             .json::<Application>()
             .await?;
 
-        let mut attempts = 0;
-        while attempts < 10 {
-            let app = self
-                .client
-                .get(self.url(&format!("/apps/{}", app.id)))
-                .send()
-                .await?
-                .json::<Application>()
-                .await?;
-
-            if app.active {
-                return Ok(app);
-            }
-            attempts += 1;
-
-            tokio::time::sleep(Duration::from_secs(1)).await
-        }
-        Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "App didn't start in time").into())
+        Ok(app)
     }
 
     pub async fn create_session(&self, app: &Application) -> anyhow::Result<SparkSession> {

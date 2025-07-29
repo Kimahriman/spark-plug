@@ -42,13 +42,6 @@ class ConnectProxyClient:
 
         data = response.json()
 
-        while data["state"] == "LAUNCHING":
-            response = self.session.get(f"{self.url}/apps/{data['id']}")
-            response.raise_for_status()
-
-            data = response.json()
-            time.sleep(1)
-
         return Application.from_dict(data)
 
     def list_applications(self) -> List[Application]:
@@ -74,9 +67,7 @@ class ConnectProxyClient:
             channel_builder = DefaultChannelBuilder(base_url)
             channel_builder.add_interceptor(TokenInterceptor(app.token))
 
-        spark = SparkSession.Builder().channelBuilder(channel_builder).create()
-
-        return spark
+        return SparkSession.Builder().channelBuilder(channel_builder).create()
 
     def stop_application(self, app: Application):
         self.session.delete(f"{self.url}/apps/{app.id}").raise_for_status()
