@@ -14,5 +14,5 @@ callback_address: http://127.0.0.1:8100
 #     deploy_mode: cluster
 #     default_configs:
 #       spark.yarn.stagingDir: /staging
-#       spark.yarn.appMasterEnv.JAVA_HOME: /usr/lib/jvm/java-17-openjdk-arm64
-#       spark.executorEnv.JAVA_HOME: /usr/lib/jvm/java-17-openjdk-arm64
+#       spark.yarn.appMasterEnv.JAVA_HOME: /usr/lib/jvm/java-17-openjdk
+#       spark.executorEnv.JAVA_HOME: /usr/lib/jvm/java-17-openjdk

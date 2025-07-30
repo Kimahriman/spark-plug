@@ -9,33 +9,6 @@ on:
       - "*"
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-    runs-on: ${{ matrix.os }}
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Format
-        run: cargo fmt -- --check
-
-      - name: build and lint with clippy
-        run: cargo clippy --all-targets -- -D warnings
-
-      - name: Check all features
-        run: cargo check --all-targets
-
   test:
     strategy:
       fail-fast: false
@@ -67,10 +40,24 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
+      - uses: sbt/setup-sbt@v1
+
       - uses: vemonet/setup-spark@v1
         with:
           spark-version: '4.0.0'
           hadoop-version: '3'
+
+      - name: Format
+        run: cargo fmt -- --check
+
+      - name: build and lint with clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Check all features
+        run: cargo check --all-targets
+
+      - name: Build the plugin
+        run: sbt package
 
       - name: Run tests
         run: cargo test
