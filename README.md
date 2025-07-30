@@ -86,6 +86,11 @@ cargo run
 cargo build --release
 ```
 
+### Build the release binary with the plugin baked in and unpacked at runtime
+```bash
+cargo build --release --features embed-plugin
+```
+
 ### Docker image
 To build the Docker image with the server and plugin built-in:
 
