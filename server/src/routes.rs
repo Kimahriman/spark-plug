@@ -123,13 +123,13 @@ async fn create_app<L: Launcher>(
                     .await;
 
                     if let Err(update_err) = update_res {
-                        warn!("Failed to set application state to failed: {update_err:?}");
+                        error!("Failed to set application state to failed: {update_err:?}");
                     }
                 }
             });
         }
         Err(e) => {
-            warn!("Failed to launch application: {e:?}");
+            error!("Failed to launch application: {e:?}");
 
             let update_res = application::ActiveModel {
                 id: ActiveValue::Set(res.id),
@@ -140,7 +140,7 @@ async fn create_app<L: Launcher>(
             .await;
 
             if let Err(update_err) = update_res {
-                warn!("Failed to set application state to failed: {update_err:?}");
+                error!("Failed to set application state to failed: {update_err:?}");
             }
 
             return Err(StatusCode::INTERNAL_SERVER_ERROR);

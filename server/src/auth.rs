@@ -265,8 +265,6 @@ impl AsyncAuthorizeRequest<axum::body::Body> for TokenAuth {
                 .map_err(|_| StatusCode::BAD_REQUEST.into_response())?
                 .to_string();
 
-            info!("Authorizing token: {authorization}");
-
             let split = authorization.split_once(' ');
             let token = match split {
                 Some(("Bearer", token)) => token,

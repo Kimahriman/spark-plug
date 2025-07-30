@@ -151,7 +151,6 @@ impl Server {
     ) where
         I: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     {
-        info!("Serving new connection");
         let router = self.router.clone();
         let db = self.db.clone();
         let signal_tx = signal_tx.clone();
@@ -297,14 +296,14 @@ async fn upstream_connection(
         );
         *req.uri_mut() = uri_string.parse().unwrap();
 
-        info!("Proxying request {:?}", req.uri().path_and_query());
+        debug!("Proxying request {:?}", req.uri().path_and_query());
 
         let response = sender
             .send_request(req)
             .await
             .map(|response| response.map(axum::body::Body::new));
 
-        info!("Proxying response {response:?}");
+        debug!("Proxying response {response:?}");
 
         tx.send(response).unwrap();
     }
@@ -396,7 +395,7 @@ impl Service<Request<hyper::body::Incoming>> for ProxyService {
         Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
 
     fn call(&self, req: Request<hyper::body::Incoming>) -> Self::Future {
-        info!("Handling call for {} {}", req.method(), req.uri());
+        debug!("Handling call for {} {}", req.method(), req.uri());
         if req
             .uri()
             .path()

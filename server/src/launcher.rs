@@ -7,7 +7,7 @@ use std::{
     sync::Arc,
 };
 
-use log::info;
+use log::{debug, info};
 use tempfile::TempPath;
 use tokio::process::{Child, Command};
 use which::which;
@@ -241,7 +241,7 @@ impl Launcher for SparkLauncher {
 
         args.push(self.plugin_path.clone());
 
-        info!("Running {:?} {}", submit_path, args.join(" "));
+        debug!("Running {:?} {}", submit_path, args.join(" "));
 
         let child = Command::new(submit_path)
             .args(args)
