@@ -6,7 +6,7 @@ use axum::{
     routing::{get, post},
 };
 use http::StatusCode;
-use log::{error, warn};
+use log::error;
 use migration::Expr;
 use reqwest::ClientBuilder;
 use sea_orm::{
@@ -336,10 +336,10 @@ mod test {
     }
 
     async fn create_test_server() -> TestServer {
-        env_logger::Builder::new()
+        let _ = env_logger::Builder::new()
             .filter(Some("spark_connect_proxy"), log::LevelFilter::Debug)
             .is_test(true)
-            .init();
+            .try_init();
 
         let db = Database::connect("sqlite::memory:").await.unwrap();
         Migrator::up(&db, None).await.unwrap();
