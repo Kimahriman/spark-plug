@@ -15,7 +15,6 @@ pub struct SparkVersion {
     pub name: String,
     // SPARK_HOME directory for this version
     pub home: String,
-    pub default: bool,
     pub master: Option<String>,
     pub deploy_mode: Option<String>,
     pub proxy_user: Option<bool>,

@@ -57,7 +57,6 @@ impl SparkLauncher {
                 vec![SparkVersion {
                     name: "default".to_string(),
                     home,
-                    default: true,
                     ..Default::default()
                 }]
             } else if let Ok(submit_path) = which("spark-submit") {
@@ -71,7 +70,6 @@ impl SparkLauncher {
                         .unwrap()
                         .to_string_lossy()
                         .to_string(),
-                    default: true,
                     ..Default::default()
                 }]
             } else {
@@ -82,11 +80,7 @@ impl SparkLauncher {
         info!("Using callback address {callback_addr}");
 
         // Check there is exactly one default
-        assert_eq!(
-            versions.iter().filter(|v| v.default).count(),
-            1,
-            "Exactly one default version must be specified"
-        );
+        assert!(!versions.is_empty(), "No Spark versions provided");
 
         // Check all the Spark directories exist
         for version in versions.iter() {
@@ -161,13 +155,7 @@ impl Launcher for SparkLauncher {
                     format!("Version named {name} not found"),
                 ))?
         } else {
-            self.versions
-                .iter()
-                .find(|v| v.default)
-                .ok_or(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    "No default version found",
-                ))?
+            &self.versions[0]
         };
 
         #[allow(unused_mut)]

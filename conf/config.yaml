@@ -1,18 +1,82 @@
-callback_address: http://127.0.0.1:8100
+# # Host to bind to, defaults to 0.0.0.0
+# bind_host: 0.0.0.0
+
+# # Port to bind to, defaults to 8100
+# bind_port: 8100
+
+# # Address to use for calling back to the server from the driver. This can point to a reverse
+# # proxy if needed. Default is the default IP of the host and bind_port
+# callback_address: http://127.0.0.1:8100
+
+# # URL of a database to store sessions in. Options include:
+# # - `sqlite::memory:` for storing sessions in an in-memory SQLite database. This does not persist across restarts.
+# # - `sqlite:///path/to/db` for storing sessions in a on-disk SQLite database. This does persist across restarts.
+# # - 'postgres://<username>:<password>@<host>[:<port>]/<db>' for storing sessions in a Postgres DB for High Availability.
 # store: postgres://postgres:postgres@localhost/postgres
+
+# # Path to the plugin to use. Defaults to use the bundled plugin if included, otherwise the path to the JAR in the
+# # repo for local development.
 # plugin_path: /usr/src/app/plugin/target/scala-2.13/spark-connect-proxy_2.13-0.1.0.jar
+
+# # Time in seconds after which sessions will timeout and applications will end with no activity. Default is 3600 (1 hour).
+# session_timeout: 3600
+
+# # Authentication details for Kerberos. A task will be started for renewing Kerberos credentials at the given renewal_interval rate.
+# kerberos_config:
+#   keytab: /path/to/keytab
+#   principal: connect-proxy/localhost@EXAMPLE.COM
+#   renewal_interval: 3600
+
+# # TLS configuration for the server, with paths to PEM encoded certificate and key files. If this is not provided, TLS it not used.
+# tls:
+#   cert: /path/to/cert
+#   key: /path/to/key
+
+# # A list of authentication methods that are applied, in order, until one succeeds and provides the username.
+# # Examples of available options are included below
 # auth_methods:
-#   - name: jwks
-#     options:
-#       oidc_url: http://localhost:8080/realms/test/.well-known/openid-configuration
-#       audience: account
+# # User is authenticated remotely, and the username is provided in the header given in the options
+# - name: remote_user
+#   options:
+#     header: REMOTE_USER
+# # Bearer token authentication using JWKS. Both JWKS and OIDC configuration URLs are supported
+# # Use a OIDC configuration URL and require the "connect-proxy" audience:
+# - name: jwks
+#   options:
+#     oidc_url: http://localhost:8080/realms/test/.well-known/openid-configuration
+#     audience: connect-proxy
+# # Use a JWKS URL and require the "user" audience
+# - name: jwks
+#   options:
+#     jwks_url: http://localhost:8080/realms/test/.well-known/jwks.json
+#     audience: user
+
+
+# # A list of supported Spark versions that can be used. Users can select which version to use when
+# # creating an application, otherwise it defaults to the first in the list.
 # spark_versions:
+#     # The name that will be shown to users
 #   - name: "4.0.0"
+#     # The SPARK_HOME directory for this version
 #     home: /opt/spark
-#     default: true
+#     # Master to use, defaults to local
 #     master: yarn
+#     # Deploy mode to use, defaults to client which means drivers run locally
 #     deploy_mode: cluster
+#     # Whether to set the proxy user to the authenticated user
+#     proxy_user: true
+#     # Environment variables to set for launching purposes
+#     env:
+#       JAVA_HOME: /usr/lib/jvm/java-17-openjdk
+#     # Default values for Spark configs. These values can be overridden by users
 #     default_configs:
 #       spark.yarn.stagingDir: /staging
 #       spark.yarn.appMasterEnv.JAVA_HOME: /usr/lib/jvm/java-17-openjdk
 #       spark.executorEnv.JAVA_HOME: /usr/lib/jvm/java-17-openjdk
+#     # Merge config values. These only apply to list based Spark configs that are a comma separated list of values.
+#     # If a user also provides these configs, the defaults here will be concatenated with a comma with the user provided values
+#     merge_configs:
+#       spark.jars.packages: io.delta:delta-spark_2.13:4.0.0
+#     # Configs that cannot be overridden by users and will always be set to explicit values
+#     override_configs:
+#       spark.listeners: org.apache.spark.MyCustomSparkListener
