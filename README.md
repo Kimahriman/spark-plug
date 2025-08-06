@@ -85,6 +85,16 @@ sbt package
 cargo run
 ```
 
+### Run tests
+[Install UV](https://docs.astral.sh/uv/getting-started/installation)
+The integration test requires access to Spark, which can be installed through the parent UV project.
+
+```bash
+uv sync
+source .venv/bin/activate
+cargo test
+```
+
 ### Build the release binary
 ```bash
 cargo build --release
