@@ -59,21 +59,13 @@ impl SparkLauncher {
                     home,
                     ..Default::default()
                 }]
-            } else if let Ok(submit_path) = which("spark-submit") {
+            } else {
                 // Otherwise check if there is a `spark-submit` on the path and infer the home dir
                 vec![SparkVersion {
                     name: "default".to_string(),
-                    home: submit_path
-                        .parent()
-                        .unwrap()
-                        .parent()
-                        .unwrap()
-                        .to_string_lossy()
-                        .to_string(),
+                    home: Self::find_default_spark_home(),
                     ..Default::default()
                 }]
-            } else {
-                panic!("Unable to find a default Spark installation");
             }
         });
         let callback_addr = config.get_callback_addr();
@@ -132,39 +124,38 @@ impl SparkLauncher {
             plugin_temp_path: plugin_temp_path.map(Arc::new),
         }
     }
-}
 
-impl Launcher for SparkLauncher {
-    fn get_versions(&self) -> Vec<String> {
-        self.versions.iter().map(|v| v.name.clone()).collect()
+    fn find_default_spark_home() -> String {
+        if let Ok(find_spark_home) = which("find_spark_home.py") {
+            // If PySpark is installed, use the find_spark_home.py script to find the appropriate
+            // Spark home directory
+            let path: String = std::process::Command::new(find_spark_home)
+                .output()
+                .expect("Failed to execute find_spark_home.py")
+                .stdout
+                .try_into()
+                .expect("Failed to decode Spark home to UTF8");
+
+            path.trim_end().to_string()
+        } else if let Ok(submit_path) = which("spark-submit") {
+            // Otherwise check if there is a `spark-submit` on the path and infer the home dir
+            submit_path
+                .parent()
+                .expect("Failed to get parent of spark-submit command")
+                .parent()
+                .expect("Failed to get parent of spark-submit command")
+                .to_string_lossy()
+                .to_string()
+        } else {
+            panic!("Unable to find a default Spark installation");
+        }
     }
 
-    fn launch(
+    fn build_conf(
         &self,
-        version_name: Option<&str>,
-        username: String,
-        token: String,
+        version: &SparkVersion,
         user_config: HashMap<String, String>,
-    ) -> Result<Child, io::Error> {
-        let version = if let Some(name) = version_name {
-            self.versions
-                .iter()
-                .find(|v| v.name == name)
-                .ok_or(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("Version named {name} not found"),
-                ))?
-        } else {
-            &self.versions[0]
-        };
-
-        #[allow(unused_mut)]
-        let mut env = version.env.clone().unwrap_or_default();
-
-        // Spark has trouble using the actual IP of the local host on Macs
-        #[cfg(target_os = "macos")]
-        env.insert("SPARK_LOCAL_IP".to_string(), "127.0.0.1".to_string());
-
+    ) -> HashMap<String, String> {
         // Start with the default config for this version
         let mut configs = version.default_configs.clone().unwrap_or_default();
 
@@ -185,6 +176,18 @@ impl Launcher for SparkLauncher {
             configs.extend(override_configs.clone());
         }
 
+        configs
+    }
+
+    fn create_submit_command(
+        &self,
+        version: &SparkVersion,
+        username: String,
+        token: String,
+        user_config: HashMap<String, String>,
+    ) -> (PathBuf, Vec<String>) {
+        let mut configs = self.build_conf(version, user_config);
+
         // Finally add our internal configs
         configs.insert(TOKEN_CONFIG.to_string(), token);
         configs.insert(CALLBACK_CONFIG.to_string(), self.callback_addr.clone());
@@ -202,7 +205,9 @@ impl Launcher for SparkLauncher {
             "0".to_string(),
         );
 
-        let submit_path = PathBuf::from(&version.home).join("bin/spark-submit");
+        let submit_path = PathBuf::from(&version.home)
+            .join("bin")
+            .join("spark-submit");
 
         let mut args = vec![];
 
@@ -229,12 +234,48 @@ impl Launcher for SparkLauncher {
 
         args.push(self.plugin_path.clone());
 
+        (submit_path, args)
+    }
+}
+
+impl Launcher for SparkLauncher {
+    fn get_versions(&self) -> Vec<String> {
+        self.versions.iter().map(|v| v.name.clone()).collect()
+    }
+
+    fn launch(
+        &self,
+        version_name: Option<&str>,
+        username: String,
+        token: String,
+        user_config: HashMap<String, String>,
+    ) -> Result<Child, io::Error> {
+        let version = if let Some(name) = version_name {
+            self.versions
+                .iter()
+                .find(|v| v.name == name)
+                .ok_or(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("Version named {name} not found"),
+                ))?
+        } else {
+            &self.versions[0]
+        };
+
+        let mut env = version.env.clone().unwrap_or_default();
+        env.insert("SPARK_HOME".to_string(), version.home.clone());
+
+        // Spark has trouble using the actual IP of the local host on Macs
+        #[cfg(target_os = "macos")]
+        env.insert("SPARK_LOCAL_IP".to_string(), "127.0.0.1".to_string());
+
+        let (submit_path, args) = self.create_submit_command(version, username, token, user_config);
+
         debug!("Running {:?} {}", submit_path, args.join(" "));
 
         let child = Command::new(submit_path)
             .args(args)
             .envs(env)
-            // .env("SPARK_HOME", &version.home)
             // .stdout(std::process::Stdio::piped())
             // .stderr(std::process::Stdio::piped())
             .spawn()?;
