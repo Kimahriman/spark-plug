@@ -152,7 +152,6 @@ impl SparkLauncher {
     }
 
     fn build_conf(
-        &self,
         version: &SparkVersion,
         user_config: HashMap<String, String>,
     ) -> HashMap<String, String> {
@@ -179,14 +178,14 @@ impl SparkLauncher {
         configs
     }
 
-    fn create_submit_command(
+    fn build_submit_command(
         &self,
         version: &SparkVersion,
         username: String,
         token: String,
         user_config: HashMap<String, String>,
     ) -> (PathBuf, Vec<String>) {
-        let mut configs = self.build_conf(version, user_config);
+        let mut configs = Self::build_conf(version, user_config);
 
         // Finally add our internal configs
         configs.insert(TOKEN_CONFIG.to_string(), token);
@@ -269,7 +268,7 @@ impl Launcher for SparkLauncher {
         #[cfg(target_os = "macos")]
         env.insert("SPARK_LOCAL_IP".to_string(), "127.0.0.1".to_string());
 
-        let (submit_path, args) = self.create_submit_command(version, username, token, user_config);
+        let (submit_path, args) = self.build_submit_command(version, username, token, user_config);
 
         debug!("Running {:?} {}", submit_path, args.join(" "));
 
@@ -281,5 +280,58 @@ impl Launcher for SparkLauncher {
             .spawn()?;
 
         Ok(child)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{config::SparkVersion, launcher::SparkLauncher};
+
+    #[test]
+    fn test_build_config() {
+        let version = SparkVersion {
+            name: "default".to_string(),
+            default_configs: Some(
+                vec![
+                    ("a".to_string(), "default".to_string()),
+                    ("b".to_string(), "default".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            merge_configs: Some(
+                vec![("c".to_string(), "merge".to_string())]
+                    .into_iter()
+                    .collect(),
+            ),
+            override_configs: Some(
+                vec![("d".to_string(), "override".to_string())]
+                    .into_iter()
+                    .collect(),
+            ),
+            ..Default::default()
+        };
+
+        let user_config = vec![
+            ("a".to_string(), "user".to_string()),
+            ("c".to_string(), "user".to_string()),
+            ("d".to_string(), "user".to_string()),
+        ]
+        .into_iter()
+        .collect();
+
+        let built = SparkLauncher::build_conf(&version, user_config);
+
+        assert_eq!(
+            built,
+            vec![
+                ("a".to_string(), "user".to_string()),
+                ("b".to_string(), "default".to_string()),
+                ("c".to_string(), "user,merge".to_string()),
+                ("d".to_string(), "override".to_string())
+            ]
+            .into_iter()
+            .collect()
+        )
     }
 }
