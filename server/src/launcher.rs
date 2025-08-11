@@ -18,6 +18,13 @@ static SPARK_HOME: &str = "SPARK_HOME";
 static TOKEN_CONFIG: &str = "spark.connect.authenticate.token";
 static CALLBACK_CONFIG: &str = "spark.connect.proxy.callback";
 static TIMEOUT_CONFIG: &str = "spark.connect.proxy.idle.timeout";
+static LISTENER_CONFIG: &str = "spark.extraListeners";
+static INTERCEPTOR_CONFIG: &str = "spark.connect.grpc.interceptor.classes";
+static GRPC_PORT_CONFIG: &str = "spark.connect.grpc.binding.port";
+
+static LISTENER_CLASS: &str = "org.apache.spark.sql.connect.proxy.SparkConnectProxyListener";
+static INTERCEPTOR_CLASS: &str = "org.apache.spark.sql.connect.proxy.SparkConnectProxyInterceptor";
+static SERVER_CLASS: &str = "org.apache.spark.sql.connect.proxy.SparkConnectProxyServer";
 
 #[cfg(feature = "embed-plugin")]
 static PLUGIN_BINARY: Option<&[u8]> = Some(include_bytes!(
@@ -191,18 +198,12 @@ impl SparkLauncher {
         configs.insert(TOKEN_CONFIG.to_string(), token);
         configs.insert(CALLBACK_CONFIG.to_string(), self.callback_addr.clone());
         configs.insert(TIMEOUT_CONFIG.to_string(), self.session_timeout.to_string());
+        configs.insert(LISTENER_CONFIG.to_string(), LISTENER_CLASS.to_string());
         configs.insert(
-            "spark.extraListeners".to_string(),
-            "org.apache.spark.sql.connect.proxy.SparkConnectProxyListener".to_string(),
+            INTERCEPTOR_CONFIG.to_string(),
+            INTERCEPTOR_CLASS.to_string(),
         );
-        configs.insert(
-            "spark.connect.grpc.interceptor.classes".to_string(),
-            "org.apache.spark.sql.connect.proxy.SparkConnectProxyInterceptor".to_string(),
-        );
-        configs.insert(
-            "spark.connect.grpc.binding.port".to_string(),
-            "0".to_string(),
-        );
+        configs.insert(GRPC_PORT_CONFIG.to_string(), "0".to_string());
 
         let submit_path = PathBuf::from(&version.home)
             .join("bin")
@@ -222,10 +223,7 @@ impl SparkLauncher {
             args.extend(["--conf".to_string(), format!("{key}={value}")]);
         }
 
-        args.extend([
-            "--class".to_string(),
-            "org.apache.spark.sql.connect.proxy.SparkConnectProxyServer".to_string(),
-        ]);
+        args.extend(["--class".to_string(), SERVER_CLASS.to_string()]);
 
         if version.proxy_user.unwrap_or_default() {
             args.extend(["--proxy-user".to_string(), username]);
@@ -285,7 +283,16 @@ impl Launcher for SparkLauncher {
 
 #[cfg(test)]
 mod test {
-    use crate::{config::SparkVersion, launcher::SparkLauncher};
+    use std::collections::HashMap;
+
+    use crate::{
+        config::SparkVersion,
+        launcher::{
+            CALLBACK_CONFIG, GRPC_PORT_CONFIG, INTERCEPTOR_CLASS, INTERCEPTOR_CONFIG,
+            LISTENER_CLASS, LISTENER_CONFIG, SERVER_CLASS, SparkLauncher, TIMEOUT_CONFIG,
+            TOKEN_CONFIG,
+        },
+    };
 
     #[test]
     fn test_build_config() {
@@ -333,5 +340,49 @@ mod test {
             .into_iter()
             .collect()
         )
+    }
+
+    #[test]
+    fn test_build_command() {
+        let launcher = SparkLauncher {
+            versions: vec![SparkVersion {
+                name: "default".to_string(),
+                home: "/opt/spark".to_string(),
+                ..Default::default()
+            }],
+            callback_addr: "http://localhost:8100".to_string(),
+            session_timeout: 60,
+            plugin_path: "/path/to/plugin".to_string(),
+            plugin_temp_path: None,
+        };
+
+        let (command, args) = launcher.build_submit_command(
+            &launcher.versions[0],
+            "user".to_string(),
+            "abcd".to_string(),
+            HashMap::default(),
+        );
+
+        let args_ref: Vec<&str> = args.iter().map(String::as_ref).collect();
+
+        assert_eq!(command.to_str().unwrap(), "/opt/spark/bin/spark-submit");
+        let (pairs, script) = args_ref.as_chunks::<2>();
+
+        assert_eq!(script[0], "/path/to/plugin");
+
+        assert!(pairs.contains(&["--conf", &format!("{TOKEN_CONFIG}=abcd")]));
+        assert!(pairs.contains(&[
+            "--conf",
+            &format!("{CALLBACK_CONFIG}=http://localhost:8100")
+        ]));
+        assert!(pairs.contains(&["--conf", &format!("{TIMEOUT_CONFIG}=60")]));
+        assert!(pairs.contains(&["--conf", &format!("{LISTENER_CONFIG}={LISTENER_CLASS}")]));
+        assert!(pairs.contains(&[
+            "--conf",
+            &format!("{INTERCEPTOR_CONFIG}={INTERCEPTOR_CLASS}")
+        ]));
+        assert!(pairs.contains(&["--conf", &format!("{GRPC_PORT_CONFIG}=0")]));
+
+        assert!(pairs.contains(&["--class", SERVER_CLASS]));
     }
 }
