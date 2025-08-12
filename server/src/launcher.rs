@@ -5,11 +5,15 @@ use std::{
     io::{self, Write},
     path::PathBuf,
     sync::Arc,
+    time::Duration,
 };
 
 use log::{debug, info};
 use tempfile::TempPath;
-use tokio::process::{Child, Command};
+use tokio::{
+    process::{Child, Command},
+    task::JoinHandle,
+};
 use which::which;
 
 use crate::config::{ProxyConfig, SparkVersion};
@@ -42,7 +46,7 @@ pub trait Launcher: Clone + Send + Sync {
         username: String,
         token: String,
         user_config: HashMap<String, String>,
-    ) -> Result<Child, io::Error>;
+    ) -> Result<JoinHandle<()>, io::Error>;
 }
 
 #[derive(Clone)]
@@ -51,6 +55,7 @@ pub struct SparkLauncher {
     // Map of Spark version key to path it's located at
     versions: Vec<SparkVersion>,
     callback_addr: String,
+    launch_timeout: u32,
     session_timeout: u32,
     plugin_path: String,
     plugin_temp_path: Option<Arc<TempPath>>,
@@ -126,6 +131,7 @@ impl SparkLauncher {
         Self {
             versions,
             callback_addr,
+            launch_timeout: config.launch_timeout.unwrap_or(300),
             session_timeout: config.session_timeout.unwrap_or(3600),
             plugin_path,
             plugin_temp_path: plugin_temp_path.map(Arc::new),
@@ -233,6 +239,23 @@ impl SparkLauncher {
 
         (submit_path, args)
     }
+
+    fn track_launch(&self, mut child: Child) -> JoinHandle<()> {
+        let launch_timeout = self.launch_timeout;
+
+        // Create a future that returns true on successful launch and false otherwise
+        let launch_success = async move { child.wait().await.is_ok_and(|s| s.success()) };
+
+        // Spawn a task that finishes when either
+        // 1. The launch process finishes and did not succeed
+        // 2. The launch timeout expires
+        tokio::spawn(async move {
+            tokio::select! {
+                false = launch_success => {}
+                _ = tokio::time::sleep(Duration::from_secs(launch_timeout as u64)) => {}
+            }
+        })
+    }
 }
 
 impl Launcher for SparkLauncher {
@@ -246,7 +269,7 @@ impl Launcher for SparkLauncher {
         username: String,
         token: String,
         user_config: HashMap<String, String>,
-    ) -> Result<Child, io::Error> {
+    ) -> Result<JoinHandle<()>, io::Error> {
         let version = if let Some(name) = version_name {
             self.versions
                 .iter()
@@ -277,7 +300,7 @@ impl Launcher for SparkLauncher {
             // .stderr(std::process::Stdio::piped())
             .spawn()?;
 
-        Ok(child)
+        Ok(self.track_launch(child))
     }
 }
 
@@ -351,6 +374,7 @@ mod test {
                 ..Default::default()
             }],
             callback_addr: "http://localhost:8100".to_string(),
+            launch_timeout: 60,
             session_timeout: 60,
             plugin_path: "/path/to/plugin".to_string(),
             plugin_temp_path: None,

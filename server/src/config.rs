@@ -49,6 +49,7 @@ pub struct ProxyConfig {
     pub bind_port: Option<u16>,
     pub callback_address: Option<String>,
     pub plugin_path: Option<String>,
+    pub launch_timeout: Option<u32>,
     pub session_timeout: Option<u32>,
     pub store: Option<String>,
     pub kerberos_config: Option<KerberosConfig>,

@@ -110,21 +110,24 @@ async fn create_app<L: Launcher>(
     );
 
     match launch {
-        Ok(mut child) => {
+        Ok(child) => {
             let db = state.db.clone();
             tokio::task::spawn(async move {
-                if child.wait().await.map(|s| !s.success()).unwrap_or(false) {
-                    let update_res = application::ActiveModel {
-                        id: ActiveValue::Set(res.id),
-                        state: ActiveValue::Set(application::State::FAILED),
-                        ..Default::default()
-                    }
-                    .update(&db)
+                let _ = child.await;
+
+                // Update the application in the database if it is still in the launching state
+                let update_result = application::Entity::update_many()
+                    .col_expr(
+                        application::Column::State,
+                        Expr::value(application::State::FAILED),
+                    )
+                    .filter(application::Column::Id.eq(res.id))
+                    .filter(application::Column::State.eq(application::State::LAUNCHING))
+                    .exec(&db)
                     .await;
 
-                    if let Err(update_err) = update_res {
-                        error!("Failed to set application state to failed: {update_err:?}");
-                    }
+                if let Err(update_err) = update_result {
+                    error!("Failed to set application state to failed: {update_err:?}");
                 }
             });
         }
@@ -301,12 +304,13 @@ async fn send_session_message(address: &str, token: &str, message: &str) -> anyh
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
 
     use axum_test::TestServer;
     use http::StatusCode;
     use migration::{Migrator, MigratorTrait};
     use sea_orm::Database;
+    use tokio::task::JoinHandle;
 
     use crate::{
         auth::{CurrentUserAuth, RemoteUserAuth, UserAuth},
@@ -330,8 +334,10 @@ mod test {
             _username: String,
             _token: String,
             _user_config: std::collections::HashMap<String, String>,
-        ) -> Result<tokio::process::Child, std::io::Error> {
-            tokio::process::Command::new("true").spawn()
+        ) -> Result<JoinHandle<()>, std::io::Error> {
+            Ok(tokio::spawn(async {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+            }))
         }
     }
 

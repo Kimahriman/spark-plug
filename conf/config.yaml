@@ -18,6 +18,9 @@
 # # repo for local development.
 # plugin_path: /usr/src/app/plugin/target/scala-2.13/spark-connect-proxy_2.13-0.1.0.jar
 
+# # Time in seconds after which a launched application that has not received its callback will be considered to have failed
+# launch_timeout: 300
+
 # # Time in seconds after which sessions will timeout and applications will end with no activity. Default is 3600 (1 hour).
 # session_timeout: 3600
 
