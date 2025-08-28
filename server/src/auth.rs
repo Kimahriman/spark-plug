@@ -1,10 +1,10 @@
-use std::{collections::HashMap, fs, sync::Arc};
+use std::{collections::HashMap, fs, str::FromStr, sync::Arc};
 
 use anyhow::Result;
 use axum::response::IntoResponse;
 use futures_util::future::BoxFuture;
 use http::{HeaderMap, Request, Response, StatusCode, header::AUTHORIZATION};
-use jsonwebtoken::{DecodingKey, TokenData, Validation, decode, decode_header};
+use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, TokenData, Validation};
 use jwks::Jwks;
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
@@ -105,9 +105,14 @@ impl JWTAuth {
             t => panic!("Unknown PEM type {t}"),
         };
 
+        let algorithm = match options.get("algorithm") {
+            Some(alg) => Algorithm::from_str(alg).expect("Unknown algorithm {alg}"),
+            None => Algorithm::RS256
+        };
+
         Self {
             key,
-            validation: Validation::default(),
+            validation: Validation::new(algorithm),
         }
     }
 }
