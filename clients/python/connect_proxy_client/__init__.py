@@ -29,12 +29,15 @@ class ConnectProxyClient:
         self,
         version: Optional[str] = None,
         config: Optional[Dict[str, str]] = None,
+        python_packages: Optional[List[str]] = None,
     ) -> Application:
         params: Dict[str, Any] = {}
         if version is not None:
             params["version"] = version
         if config is not None:
             params["config"] = config
+        if python_packages is not None:
+            params["python_packages"] = python_packages
 
         response = self.session.post(f"{self.url}/apps", json=params)
         response.raise_for_status()

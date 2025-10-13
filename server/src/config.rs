@@ -22,6 +22,7 @@ pub struct SparkVersion {
     pub default_configs: Option<HashMap<String, String>>,
     pub merge_configs: Option<HashMap<String, String>>,
     pub override_configs: Option<HashMap<String, String>>,
+    pub python_executable: Option<String>,
 }
 
 #[derive(Clone, Default, Deserialize)]

@@ -83,3 +83,5 @@
 #     # Configs that cannot be overridden by users and will always be set to explicit values
 #     override_configs:
 #       spark.listeners: org.apache.spark.MyCustomSparkListener
+#     # Python executable to use for creating virtual environments. Must be at the same path on all nodes.     
+#     python_executable: python3.12

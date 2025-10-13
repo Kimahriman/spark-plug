@@ -37,15 +37,17 @@ static PLUGIN_BINARY: Option<&[u8]> = Some(include_bytes!(
 #[cfg(not(feature = "embed-plugin"))]
 static PLUGIN_BINARY: Option<&[u8]> = None;
 
+#[async_trait::async_trait]
 pub trait Launcher: Clone + Send + Sync {
     fn get_versions(&self) -> Vec<String>;
 
-    fn launch(
+    async fn launch(
         &self,
         version_name: Option<&str>,
         username: String,
         token: String,
         user_config: HashMap<String, String>,
+        python_packages: Option<Vec<String>>,
     ) -> Result<JoinHandle<()>, io::Error>;
 }
 
@@ -64,11 +66,15 @@ pub struct SparkLauncher {
 impl SparkLauncher {
     pub fn from_config(config: &ProxyConfig) -> Self {
         let versions = config.spark_versions.clone().unwrap_or_else(|| {
+            let python_executable = which("python3")
+                .ok()
+                .map(|p| p.to_string_lossy().to_string());
             // Check if SPARK_HOME is defined and use that as the default
             if let Ok(home) = env::var(SPARK_HOME) {
                 vec![SparkVersion {
                     name: "default".to_string(),
                     home,
+                    python_executable,
                     ..Default::default()
                 }]
             } else {
@@ -76,6 +82,7 @@ impl SparkLauncher {
                 vec![SparkVersion {
                     name: "default".to_string(),
                     home: Self::find_default_spark_home(),
+                    python_executable,
                     ..Default::default()
                 }]
             }
@@ -191,12 +198,88 @@ impl SparkLauncher {
         configs
     }
 
+    async fn build_python_venv(
+        python_executable: Option<&str>,
+        packages: Vec<String>,
+    ) -> io::Result<String> {
+        let python = python_executable.ok_or(io::Error::new(
+            io::ErrorKind::NotFound,
+            "No python executable specified for creating virtual environment",
+        ))?;
+
+        let venv_dir = tempfile::Builder::new()
+            .prefix("spark-connect-proxy-venv")
+            .tempdir()?;
+        let venv_path = venv_dir.path().to_string_lossy().to_string();
+
+        // Create the virtual environment
+        let status = Command::new(python)
+            .args(["-m", "venv", &venv_path])
+            .status()
+            .await?;
+
+        if !status.success() {
+            return Err(io::Error::other(format!(
+                "Failed to create virtual environment with {python}"
+            )));
+        }
+
+        // Install the packages
+        let pip_executable = if cfg!(target_os = "windows") {
+            format!("{venv_path}/Scripts/pip")
+        } else {
+            format!("{venv_path}/bin/pip")
+        };
+
+        let mut install_args = vec!["install"];
+        install_args.push("venv-pack");
+        install_args.extend(packages.iter().map(String::as_str));
+
+        let status = Command::new(pip_executable)
+            .args(install_args)
+            .status()
+            .await?;
+
+        if !status.success() {
+            return Err(io::Error::other(
+                "Failed to install packages in virtual environment",
+            ));
+        }
+
+        let venv_pack_executable = if cfg!(target_os = "windows") {
+            format!("{venv_path}/Scripts/venv-pack")
+        } else {
+            format!("{venv_path}/bin/venv-pack")
+        };
+
+        let status = Command::new(venv_pack_executable)
+            .args([
+                "-p",
+                &venv_path,
+                "-o",
+                &format!("{venv_path}.tgz"),
+                "--exclude",
+                "*/venv-pack/*",
+            ])
+            .status()
+            .await?;
+
+        if !status.success() {
+            return Err(io::Error::other(
+                "Failed to install packages in virtual environment",
+            ));
+        }
+
+        Ok(format!("{venv_path}.tgz"))
+    }
+
     fn build_submit_command(
         &self,
         version: &SparkVersion,
         username: String,
         token: String,
         user_config: HashMap<String, String>,
+        venv_tarball: Option<String>,
     ) -> (PathBuf, Vec<String>) {
         let mut configs = Self::build_conf(version, user_config);
 
@@ -223,6 +306,17 @@ impl SparkLauncher {
 
         if let Some(deploy_mode) = version.deploy_mode.as_ref() {
             args.extend(["--deploy-mode".to_string(), deploy_mode.clone()]);
+        }
+
+        if let Some(venv_tarball) = venv_tarball {
+            args.extend([
+                "--archives".to_string(),
+                format!("{venv_tarball}#environment"),
+            ]);
+            configs.insert(
+                "spark.sql.execution.pyspark.python".to_string(),
+                "environment/bin/python".to_string(),
+            );
         }
 
         for (key, value) in configs.iter() {
@@ -258,17 +352,19 @@ impl SparkLauncher {
     }
 }
 
+#[async_trait::async_trait]
 impl Launcher for SparkLauncher {
     fn get_versions(&self) -> Vec<String> {
         self.versions.iter().map(|v| v.name.clone()).collect()
     }
 
-    fn launch(
+    async fn launch(
         &self,
         version_name: Option<&str>,
         username: String,
         token: String,
         user_config: HashMap<String, String>,
+        python_packages: Option<Vec<String>>,
     ) -> Result<JoinHandle<()>, io::Error> {
         let version = if let Some(name) = version_name {
             self.versions
@@ -289,7 +385,19 @@ impl Launcher for SparkLauncher {
         #[cfg(target_os = "macos")]
         env.insert("SPARK_LOCAL_IP".to_string(), "127.0.0.1".to_string());
 
-        let (submit_path, args) = self.build_submit_command(version, username, token, user_config);
+        let venv_tarball = match python_packages {
+            Some(packages) if !packages.is_empty() => Some(
+                Self::build_python_venv(
+                    version.python_executable.as_ref().map(String::as_ref),
+                    packages,
+                )
+                .await?,
+            ),
+            _ => None,
+        };
+
+        let (submit_path, args) =
+            self.build_submit_command(version, username, token, user_config, venv_tarball);
 
         debug!("Running {:?} {}", submit_path, args.join(" "));
 
@@ -385,6 +493,7 @@ mod test {
             "user".to_string(),
             "abcd".to_string(),
             HashMap::default(),
+            None,
         );
 
         let args_ref: Vec<&str> = args.iter().map(String::as_ref).collect();

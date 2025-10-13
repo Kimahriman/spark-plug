@@ -62,6 +62,7 @@ struct AppStateDyn<L: Launcher + 'static> {
 struct CreateApplicationRequest {
     version: Option<String>,
     config: Option<HashMap<String, String>>,
+    python_packages: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -102,12 +103,16 @@ async fn create_app<L: Launcher>(
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
-    let launch = state.launcher.launch(
-        params.version.as_ref().map(|s| s.as_ref()),
-        user.0,
-        token,
-        params.config.unwrap_or_default(),
-    );
+    let launch = state
+        .launcher
+        .launch(
+            params.version.as_ref().map(|s| s.as_ref()),
+            user.0,
+            token,
+            params.config.unwrap_or_default(),
+            params.python_packages,
+        )
+        .await;
 
     match launch {
         Ok(child) => {
@@ -323,17 +328,19 @@ mod test {
     #[derive(Clone)]
     struct MockLauncher {}
 
+    #[async_trait::async_trait]
     impl Launcher for MockLauncher {
         fn get_versions(&self) -> Vec<String> {
             vec!["4.0.0".to_string()]
         }
 
-        fn launch(
+        async fn launch(
             &self,
             _version_name: Option<&str>,
             _username: String,
             _token: String,
             _user_config: std::collections::HashMap<String, String>,
+            _python_packages: Option<Vec<String>>,
         ) -> Result<JoinHandle<()>, std::io::Error> {
             Ok(tokio::spawn(async {
                 tokio::time::sleep(Duration::from_secs(60)).await;
