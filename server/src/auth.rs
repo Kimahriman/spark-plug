@@ -24,7 +24,7 @@ fn extract_bearer_token(header_map: &HeaderMap) -> Result<Option<&str>> {
         .map(|h| h.to_str())
         .transpose()?
         .filter(|h| h.starts_with("Bearer "))
-        .map(|h| (&h[7..])))
+        .map(|h| &h[7..]))
 }
 
 pub(crate) trait UserAuthMethod: Sync + Send {
