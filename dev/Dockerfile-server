@@ -1,7 +1,7 @@
 FROM rust:1.88 AS rust-builder
 
 ARG TARGETPLATFORM
-ARG SPARK_VERSION=4.0.0
+ARG SPARK_VERSION=4.0.1
 
 RUN wget -q https://dlcdn.apache.org/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop3.tgz && \
     tar -xf spark-${SPARK_VERSION}-bin-hadoop3.tgz -C /opt && \
