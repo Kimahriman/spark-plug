@@ -48,7 +48,7 @@ CMD ["/opt/spark-connect-proxy/spark-connect-proxy"]
 
 FROM ubuntu:noble AS spark-cache
 
-ARG SPARK_VERSION=4.0.0
+ARG SPARK_VERSION=4.0.1
 
 RUN apt-get update && \
     apt-get install -y wget
@@ -59,7 +59,7 @@ RUN wget -q https://dlcdn.apache.org/spark/spark-${SPARK_VERSION}/spark-${SPARK_
 
 FROM base
 
-ARG SPARK_VERSION=4.0.0
+ARG SPARK_VERSION=4.0.1
 
 COPY --from=spark-cache /opt/spark-${SPARK_VERSION}-bin-hadoop3 /opt/spark
 
