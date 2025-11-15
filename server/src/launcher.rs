@@ -273,6 +273,46 @@ impl SparkLauncher {
         Ok(format!("{venv_path}.tgz"))
     }
 
+    /// Validates that file-based configs don't include local files
+    /// Checks spark.files, spark.archives, and spark.submit.pyFiles
+    /// All files must be fully qualified with a protocol (e.g., s3://, hdfs://)
+    /// and cannot use the file:// protocol
+    fn validate_file_configs(configs: &HashMap<String, String>) -> Result<(), io::Error> {
+        let file_config_keys = ["spark.files", "spark.archives", "spark.submit.pyFiles"];
+
+        for key in file_config_keys.iter() {
+            if let Some(value) = configs.get(*key) {
+                for file_path in value.split(',') {
+                    let trimmed = file_path.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+
+                    // Check if the path has a protocol (contains ://)
+                    if !trimmed.contains("://") {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!(
+                                "Config {} contains file path without protocol: {}",
+                                key, trimmed
+                            ),
+                        ));
+                    }
+
+                    // Check if the protocol is file://
+                    if trimmed.starts_with("file://") {
+                        return Err(io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            format!("Config {} cannot use file:// protocol: {}", key, trimmed),
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     fn build_submit_command(
         &self,
         version: &SparkVersion,
@@ -280,7 +320,10 @@ impl SparkLauncher {
         token: String,
         user_config: HashMap<String, String>,
         venv_tarball: Option<String>,
-    ) -> (PathBuf, Vec<String>) {
+    ) -> Result<(PathBuf, Vec<String>), io::Error> {
+        // Validate file-based configs for security
+        Self::validate_file_configs(&user_config)?;
+
         let mut configs = Self::build_conf(version, user_config);
 
         // Finally add our internal configs
@@ -331,7 +374,7 @@ impl SparkLauncher {
 
         args.push(self.plugin_path.clone());
 
-        (submit_path, args)
+        Ok((submit_path, args))
     }
 
     fn track_launch(&self, mut child: Child) -> JoinHandle<()> {
@@ -397,7 +440,7 @@ impl Launcher for SparkLauncher {
         };
 
         let (submit_path, args) =
-            self.build_submit_command(version, username, token, user_config, venv_tarball);
+            self.build_submit_command(version, username, token, user_config, venv_tarball)?;
 
         debug!("Running {:?} {}", submit_path, args.join(" "));
 
@@ -488,13 +531,15 @@ mod test {
             plugin_temp_path: None,
         };
 
-        let (command, args) = launcher.build_submit_command(
-            &launcher.versions[0],
-            "user".to_string(),
-            "abcd".to_string(),
-            HashMap::default(),
-            None,
-        );
+        let (command, args) = launcher
+            .build_submit_command(
+                &launcher.versions[0],
+                "user".to_string(),
+                "abcd".to_string(),
+                HashMap::default(),
+                None,
+            )
+            .unwrap();
 
         let args_ref: Vec<&str> = args.iter().map(String::as_ref).collect();
 
@@ -517,5 +562,46 @@ mod test {
         assert!(pairs.contains(&["--conf", &format!("{GRPC_PORT_CONFIG}=0")]));
 
         assert!(pairs.contains(&["--class", SERVER_CLASS]));
+    }
+
+    #[test]
+    fn test_validate_file_configs_rejects_local_paths() {
+        let mut configs = HashMap::new();
+        configs.insert(
+            "spark.files".to_string(),
+            "/local/path/file.txt".to_string(),
+        );
+
+        assert!(SparkLauncher::validate_file_configs(&configs).is_err());
+    }
+
+    #[test]
+    fn test_validate_file_configs_rejects_file_protocol() {
+        let mut configs = HashMap::new();
+        configs.insert("spark.files".to_string(), "file:///etc/passwd".to_string());
+
+        assert!(SparkLauncher::validate_file_configs(&configs).is_err());
+    }
+
+    #[test]
+    fn test_validate_file_configs_allows_remote_paths() {
+        let mut configs = HashMap::new();
+        configs.insert(
+            "spark.files".to_string(),
+            "s3://bucket/file.txt,hdfs://namenode/data".to_string(),
+        );
+        configs.insert(
+            "spark.archives".to_string(),
+            "gs://bucket/archive.tar.gz".to_string(),
+        );
+
+        assert!(SparkLauncher::validate_file_configs(&configs).is_ok());
+    }
+
+    #[test]
+    fn test_validate_file_configs_allows_empty_values() {
+        let configs = HashMap::new();
+
+        assert!(SparkLauncher::validate_file_configs(&configs).is_ok());
     }
 }
