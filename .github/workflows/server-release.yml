@@ -1,0 +1,63 @@
+name: server-release
+
+on:
+  push:
+    branches:
+      - 'master'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      # Keep line-table debug info for useful traces if things fail
+      RUSTFLAGS: -C debuginfo=1
+      RUST_BACKTRACE: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Java (Temurin 17)
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup sbt
+        uses: sbt/setup-sbt@v1
+
+      - name: Build the SBT plugin
+        working-directory: plugin
+        run: sbt package
+
+      - name: Build the Rust server (release + embed-plugin)
+        run: cargo build --release --manifest-path server/Cargo.toml --features embed-plugin
+
+      - id: determine_version
+        name: Determine server version
+        run: |
+          # extract first matching version from server/Cargo.toml
+          version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' server/Cargo.toml | head -n1)
+          if [ -z "$version" ]; then
+            echo "Could not determine version from server/Cargo.toml" >&2
+            exit 1
+          fi
+          echo "version=$version" >> $GITHUB_OUTPUT
+
+      - name: Package server binary as tgz
+        run: |
+          version=${{ steps.determine_version.outputs.version }}
+          mkdir -p dist
+          cp server/target/release/spark-connect-proxy dist/
+          tarball=spark-connect-proxy-${version}.tgz
+          tar -C dist -czf "$tarball" spark-connect-proxy
+          ls -lh "$tarball"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: spark-connect-proxy-${{ steps.determine_version.outputs.version }}.tgz
+          path: spark-connect-proxy-${{ steps.determine_version.outputs.version }}.tgz

@@ -24,18 +24,16 @@ jobs:
       RUST_LOG: debug
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install minimal stable with clippy and rustfmt
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: stable
+        uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
 
       - uses: arduino/setup-protoc@v3
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: "temurin"
           java-version: "17"
@@ -44,7 +42,7 @@ jobs:
 
       - uses: vemonet/setup-spark@v1
         with:
-          spark-version: '4.0.0'
+          spark-version: '4.0.1'
           hadoop-version: '3'
 
       - name: Format
