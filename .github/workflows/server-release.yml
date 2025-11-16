@@ -30,7 +30,6 @@ jobs:
         uses: sbt/setup-sbt@v1
 
       - name: Build the SBT plugin
-        working-directory: plugin
         run: sbt package
 
       - name: Build the Rust server (release + embed-plugin)
