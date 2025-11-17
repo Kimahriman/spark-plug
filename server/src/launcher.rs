@@ -19,6 +19,7 @@ use which::which;
 use crate::config::{ProxyConfig, SparkVersion};
 
 static SPARK_HOME: &str = "SPARK_HOME";
+static APP_NAME_CONFIG: &str = "spark.app.name";
 static TOKEN_CONFIG: &str = "spark.connect.authenticate.token";
 static CALLBACK_CONFIG: &str = "spark.connect.proxy.callback";
 static TIMEOUT_CONFIG: &str = "spark.connect.proxy.idle.timeout";
@@ -44,6 +45,7 @@ pub trait Launcher: Clone + Send + Sync {
     async fn launch(
         &self,
         version_name: Option<&str>,
+        session_id: i32,
         username: String,
         token: String,
         user_config: HashMap<String, String>,
@@ -316,6 +318,7 @@ impl SparkLauncher {
     fn build_submit_command(
         &self,
         version: &SparkVersion,
+        session_id: i32,
         username: String,
         token: String,
         user_config: HashMap<String, String>,
@@ -325,6 +328,13 @@ impl SparkLauncher {
         Self::validate_file_configs(&user_config)?;
 
         let mut configs = Self::build_conf(version, user_config);
+
+        if !configs.contains_key(APP_NAME_CONFIG) {
+            configs.insert(
+                APP_NAME_CONFIG.to_string(),
+                format!("connect-proxy-session-{}", session_id),
+            );
+        }
 
         // Finally add our internal configs
         configs.insert(TOKEN_CONFIG.to_string(), token);
@@ -404,6 +414,7 @@ impl Launcher for SparkLauncher {
     async fn launch(
         &self,
         version_name: Option<&str>,
+        session_id: i32,
         username: String,
         token: String,
         user_config: HashMap<String, String>,
@@ -439,8 +450,14 @@ impl Launcher for SparkLauncher {
             _ => None,
         };
 
-        let (submit_path, args) =
-            self.build_submit_command(version, username, token, user_config, venv_tarball)?;
+        let (submit_path, args) = self.build_submit_command(
+            version,
+            session_id,
+            username,
+            token,
+            user_config,
+            venv_tarball,
+        )?;
 
         debug!("Running {:?} {}", submit_path, args.join(" "));
 
@@ -462,9 +479,9 @@ mod test {
     use crate::{
         config::SparkVersion,
         launcher::{
-            CALLBACK_CONFIG, GRPC_PORT_CONFIG, INTERCEPTOR_CLASS, INTERCEPTOR_CONFIG,
-            LISTENER_CLASS, LISTENER_CONFIG, SERVER_CLASS, SparkLauncher, TIMEOUT_CONFIG,
-            TOKEN_CONFIG,
+            APP_NAME_CONFIG, CALLBACK_CONFIG, GRPC_PORT_CONFIG, INTERCEPTOR_CLASS,
+            INTERCEPTOR_CONFIG, LISTENER_CLASS, LISTENER_CONFIG, SERVER_CLASS, SparkLauncher,
+            TIMEOUT_CONFIG, TOKEN_CONFIG,
         },
     };
 
@@ -534,6 +551,7 @@ mod test {
         let (command, args) = launcher
             .build_submit_command(
                 &launcher.versions[0],
+                1,
                 "user".to_string(),
                 "abcd".to_string(),
                 HashMap::default(),
@@ -548,6 +566,10 @@ mod test {
 
         assert_eq!(script[0], "/path/to/plugin");
 
+        assert!(pairs.contains(&[
+            "--conf",
+            &format!("{APP_NAME_CONFIG}=connect-proxy-session-1")
+        ]));
         assert!(pairs.contains(&["--conf", &format!("{TOKEN_CONFIG}=abcd")]));
         assert!(pairs.contains(&[
             "--conf",

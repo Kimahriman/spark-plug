@@ -107,6 +107,7 @@ async fn create_app<L: Launcher>(
         .launcher
         .launch(
             params.version.as_ref().map(|s| s.as_ref()),
+            res.id,
             user.0,
             token,
             params.config.unwrap_or_default(),
@@ -337,6 +338,7 @@ mod test {
         async fn launch(
             &self,
             _version_name: Option<&str>,
+            _session_id: i32,
             _username: String,
             _token: String,
             _user_config: std::collections::HashMap<String, String>,
