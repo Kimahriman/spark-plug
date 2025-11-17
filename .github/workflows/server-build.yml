@@ -1,18 +1,72 @@
-name: server-release
+name: server-build
 
 on:
   push:
     branches:
       - 'master'
+  pull_request:
+    branches:
+      - "*"
 
 jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    env:
+      # Disable full debug symbol generation to speed up CI build and keep memory down
+      # "1" means line tables only, which is useful for panic tracebacks.
+      RUSTFLAGS: -C debuginfo=1
+      RUST_BACKTRACE: "1"
+      RUST_LOG: debug
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install minimal stable with clippy and rustfmt
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: arduino/setup-protoc@v3
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - uses: sbt/setup-sbt@v1
+
+      - uses: vemonet/setup-spark@v1
+        with:
+          spark-version: '4.0.1'
+          hadoop-version: '3'
+
+      - name: Format
+        run: cargo fmt -- --check
+
+      - name: build and lint with clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Check all features
+        run: cargo check --all-targets
+
+      - name: Build the plugin
+        run: sbt package
+
+      - name: Run tests
+        run: cargo test
+
   publish:
     runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master'
+    needs: test
     env:
       # Keep line-table debug info for useful traces if things fail
       RUSTFLAGS: -C debuginfo=1
       RUST_BACKTRACE: "1"
-
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -33,7 +87,7 @@ jobs:
         run: sbt package
 
       - name: Build the Rust server (release + embed-plugin)
-        run: cargo build --release --manifest-path server/Cargo.toml --features embed-plugin
+        run: cargo build --release -p spark-connect-proxy --features embed-plugin
 
       - id: determine_version
         name: Determine server version
@@ -50,7 +104,7 @@ jobs:
         run: |
           version=${{ steps.determine_version.outputs.version }}
           mkdir -p dist
-          cp server/target/release/spark-connect-proxy dist/
+          cp target/release/spark-connect-proxy dist/
           tarball=spark-connect-proxy-${version}.tgz
           tar -C dist -czf "$tarball" spark-connect-proxy
           ls -lh "$tarball"

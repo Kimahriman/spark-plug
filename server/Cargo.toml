@@ -30,7 +30,7 @@ rustls = { version = "0.23", default-features = false, features = ["std", "ring"
 rustls-pemfile = "2"
 rustls-pki-types = "1"
 sea-orm = { version = "1", features = ["sqlx-all", "sqlite-use-returning-for-3_35", "runtime-tokio-rustls"] }
-sea-orm-migration = { version = "1.1.17", features = ["runtime-tokio-rustls", "sqlx-postgres", "sqlx-mysql", "sqlx-sqlite"] }
+sea-orm-migration = { version = "1.1.19", features = ["runtime-tokio-rustls", "sqlx-postgres", "sqlx-mysql", "sqlx-sqlite"] }
 serde = { version = "1", features = ["derive"] }
 tempfile = "3"
 thiserror = "2"
