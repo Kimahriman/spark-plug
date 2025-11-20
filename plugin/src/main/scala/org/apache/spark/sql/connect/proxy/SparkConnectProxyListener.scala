@@ -52,13 +52,17 @@ class SparkConnectProxyListener(conf: SparkConf) extends SparkListener with Logg
         val connectUri = s"$hostAddress:$bindingPort"
 
         logInfo(s"Connect service started on $connectUri")
+
+        val appId = SparkContext.getOrCreate().applicationId
         
         val request = HttpRequest.newBuilder()
           .uri(URI.create(s"$callbackAddr/callback"))
           .timeout(Duration.of(10, SECONDS))
           .setHeader("Authorization", authorizationHeader)
           .setHeader("Content-type", "application/json")
-          .POST(HttpRequest.BodyPublishers.ofString(s"{\"address\": \"$connectUri\"}"))
+          .POST(HttpRequest.BodyPublishers.ofString({
+            s"{\"address\": \"$connectUri\", \"application_id\": \"$appId\"}"
+          }))
           .build()
 
         logInfo(s"Sending callback info to ${request.uri()}")

@@ -26,6 +26,7 @@ pub struct Model {
     pub state: State,
     pub token: String,
     pub address: Option<String>,
+    pub application_id: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

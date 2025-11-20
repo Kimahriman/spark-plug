@@ -220,8 +220,8 @@ docker build -t spark-connect-proxy --target base .  # Without
 ## Testing
 
 ```bash
-cargo test                 # Unit + integration tests
-uv sync && source .venv/bin/activate  # Setup test env
+cargo test --lib # Unit tests
+uv run cargo test --test test_integration # Integration test with default PySpark in venv
 ```
 
 ## Troubleshooting

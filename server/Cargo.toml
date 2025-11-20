@@ -25,6 +25,7 @@ jsonwebtoken = "9"
 jwks = "0.4"
 local-ip-address = "0.6"
 log = "0.4"
+minijinja = "2.12"
 reqwest = { version = "0.12", default-features = false, features = ["h2", "http2", "json", "rustls-tls-native-roots"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
 rustls-pemfile = "2"

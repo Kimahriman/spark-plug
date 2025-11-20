@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 use crate::{
     auth::{BearerToken, TokenAuth, UserAuth, UserId},
+    config::ProxyConfig,
     entities::application,
     launcher::Launcher,
 };
@@ -28,6 +29,7 @@ pub(crate) async fn get_router<L>(
     user_auth: UserAuth,
     launcher: L,
     db: DatabaseConnection,
+    config: ProxyConfig,
 ) -> Router
 where
     L: Launcher + 'static,
@@ -35,6 +37,7 @@ where
     let app_state = AppStateDyn {
         db,
         launcher: Arc::new(launcher),
+        config: Arc::new(config),
     };
 
     let user_api = Router::new()
@@ -56,6 +59,7 @@ where
 struct AppStateDyn<L: Launcher + 'static> {
     db: DatabaseConnection,
     launcher: Arc<L>,
+    config: Arc<ProxyConfig>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -71,17 +75,8 @@ pub struct ApplicationInfo {
     token: String,
     state: String,
     active: bool,
-}
-
-impl From<application::Model> for ApplicationInfo {
-    fn from(value: application::Model) -> Self {
-        Self {
-            id: value.id,
-            token: value.token,
-            state: value.state.to_value().to_string(),
-            active: value.address.is_some(),
-        }
-    }
+    // Optional generated UI URL for the application (from config.template)
+    ui_url: Option<String>,
 }
 
 async fn create_app<L: Launcher>(
@@ -156,7 +151,18 @@ async fn create_app<L: Launcher>(
         }
     }
 
-    Ok(Json(res.into()))
+    // Build response including UI URL if configured
+    let ui_url = state.config.render_ui_url(res.application_id.as_deref());
+
+    let info = ApplicationInfo {
+        id: res.id,
+        token: res.token,
+        state: res.state.to_value().to_string(),
+        active: res.address.is_some(),
+        ui_url,
+    };
+
+    Ok(Json(info))
 }
 
 async fn get_app<L: Launcher>(
@@ -175,7 +181,16 @@ async fn get_app<L: Launcher>(
         })?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    Ok(Json(app.into()))
+    let ui_url = state.config.render_ui_url(app.application_id.as_deref());
+    let info = ApplicationInfo {
+        id: app.id,
+        token: app.token,
+        state: app.state.to_value().to_string(),
+        active: app.address.is_some(),
+        ui_url,
+    };
+
+    Ok(Json(info))
 }
 
 async fn list_apps<L: Launcher>(
@@ -190,7 +205,18 @@ async fn list_apps<L: Launcher>(
             error!("Failed to get applications from db: {e:?}");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
-    Ok(Json(apps.into_iter().map(Into::into).collect()))
+    let infos = apps
+        .into_iter()
+        .map(|app| ApplicationInfo {
+            id: app.id,
+            token: app.token,
+            state: app.state.to_value().to_string(),
+            active: app.address.is_some(),
+            ui_url: state.config.render_ui_url(app.application_id.as_deref()),
+        })
+        .collect();
+
+    Ok(Json(infos))
 }
 
 async fn delete_app<L: Launcher>(
@@ -234,6 +260,8 @@ async fn list_versions<L: Launcher>(State(state): State<AppStateDyn<L>>) -> Json
 #[derive(Serialize, Deserialize)]
 struct ApplicationCallbackRequest {
     address: String,
+    // application_id is now required in the callback request
+    application_id: String,
 }
 
 async fn app_callback<L: Launcher>(
@@ -246,6 +274,10 @@ async fn app_callback<L: Launcher>(
         .col_expr(
             application::Column::State,
             Expr::value(application::State::RUNNING),
+        )
+        .col_expr(
+            application::Column::ApplicationId,
+            Expr::value(params.application_id.clone()),
         )
         .filter(application::Column::Token.eq(token.0))
         .exec(&state.db)
@@ -351,6 +383,10 @@ mod test {
     }
 
     async fn create_test_server() -> TestServer {
+        create_test_server_with_config(crate::config::ProxyConfig::default()).await
+    }
+
+    async fn create_test_server_with_config(config: crate::config::ProxyConfig) -> TestServer {
         let _ = env_logger::Builder::new()
             .filter(Some("spark_connect_proxy"), log::LevelFilter::Debug)
             .is_test(true)
@@ -369,6 +405,7 @@ mod test {
             },
             MockLauncher {},
             db,
+            config,
         )
         .await;
 
@@ -402,6 +439,7 @@ mod test {
             .authorization_bearer(app.token)
             .json(&ApplicationCallbackRequest {
                 address: "localhost:12345".to_string(),
+                application_id: "test-app-1".to_string(),
             })
             .await
             .assert_status(StatusCode::OK);
@@ -451,5 +489,162 @@ mod test {
             .add_header("REMOTE_USER", "user1")
             .await
             .assert_json::<Vec<ApplicationInfo>>(&vec![app]);
+    }
+
+    #[tokio::test]
+    async fn test_ui_url_rendering() {
+        // Create server with a UI URL template
+        let config = crate::config::ProxyConfig {
+            ui_url_template: Some(
+                "https://knox.example.com/gateway/default/yarn/app/{{ application_id }}"
+                    .to_string(),
+            ),
+            ..Default::default()
+        };
+        let server = create_test_server_with_config(config).await;
+
+        // Create an app
+        let res = server
+            .post("/apps")
+            .add_header("REMOTE_USER", "testuser")
+            .json(&CreateApplicationRequest::default())
+            .await;
+
+        res.assert_status(StatusCode::OK);
+        let app = res.json::<ApplicationInfo>();
+
+        // Initially, UI URL should be None since application_id is not set
+        assert_eq!(app.ui_url, None);
+        assert_eq!(app.state, "LAUNCHING");
+
+        // Send callback with application_id
+        server
+            .post("/callback")
+            .authorization_bearer(app.token.clone())
+            .json(&ApplicationCallbackRequest {
+                address: "localhost:54321".to_string(),
+                application_id: "app-20251119-001".to_string(),
+            })
+            .await
+            .assert_status(StatusCode::OK);
+
+        // Now fetch the app again and verify UI URL is rendered
+        let res = server
+            .get(&format!("/apps/{}", app.id))
+            .add_header("REMOTE_USER", "testuser")
+            .await;
+
+        res.assert_status(StatusCode::OK);
+        let updated_app = res.json::<ApplicationInfo>();
+        assert_eq!(updated_app.state, "RUNNING");
+        assert!(updated_app.active);
+
+        // Check that the UI URL was properly rendered with the application_id
+        assert_eq!(
+            updated_app.ui_url,
+            Some("https://knox.example.com/gateway/default/yarn/app/app-20251119-001".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ui_url_rendering_in_list() {
+        // Create server with a UI URL template
+        let config = crate::config::ProxyConfig {
+            ui_url_template: Some("https://example.com/ui/{{ application_id }}".to_string()),
+            ..Default::default()
+        };
+        let server = create_test_server_with_config(config).await;
+
+        // Create multiple apps
+        let res1 = server
+            .post("/apps")
+            .add_header("REMOTE_USER", "user1")
+            .json(&CreateApplicationRequest::default())
+            .await;
+        let app1 = res1.json::<ApplicationInfo>();
+
+        let res2 = server
+            .post("/apps")
+            .add_header("REMOTE_USER", "user1")
+            .json(&CreateApplicationRequest::default())
+            .await;
+        let app2 = res2.json::<ApplicationInfo>();
+
+        // Set application_id for app1
+        server
+            .post("/callback")
+            .authorization_bearer(app1.token.clone())
+            .json(&ApplicationCallbackRequest {
+                address: "localhost:11111".to_string(),
+                application_id: "spark-app-1".to_string(),
+            })
+            .await
+            .assert_status(StatusCode::OK);
+
+        // Set application_id for app2
+        server
+            .post("/callback")
+            .authorization_bearer(app2.token.clone())
+            .json(&ApplicationCallbackRequest {
+                address: "localhost:22222".to_string(),
+                application_id: "spark-app-2".to_string(),
+            })
+            .await
+            .assert_status(StatusCode::OK);
+
+        // List apps and verify UI URLs are rendered for both
+        let res = server.get("/apps").add_header("REMOTE_USER", "user1").await;
+
+        res.assert_status(StatusCode::OK);
+        let apps = res.json::<Vec<ApplicationInfo>>();
+        assert_eq!(apps.len(), 2);
+
+        // Find apps by id and verify their UI URLs
+        let updated_app1 = apps.iter().find(|a| a.id == app1.id).unwrap();
+        let updated_app2 = apps.iter().find(|a| a.id == app2.id).unwrap();
+
+        assert_eq!(
+            updated_app1.ui_url,
+            Some("https://example.com/ui/spark-app-1".to_string())
+        );
+        assert_eq!(
+            updated_app2.ui_url,
+            Some("https://example.com/ui/spark-app-2".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ui_url_none_without_template() {
+        // Create server without UI URL template
+        let config = crate::config::ProxyConfig::default();
+        let server = create_test_server_with_config(config).await;
+
+        // Create an app and set callback with application_id
+        let res = server
+            .post("/apps")
+            .add_header("REMOTE_USER", "testuser")
+            .json(&CreateApplicationRequest::default())
+            .await;
+
+        let app = res.json::<ApplicationInfo>();
+
+        server
+            .post("/callback")
+            .authorization_bearer(app.token.clone())
+            .json(&ApplicationCallbackRequest {
+                address: "localhost:99999".to_string(),
+                application_id: "some-app-id".to_string(),
+            })
+            .await
+            .assert_status(StatusCode::OK);
+
+        // Fetch app and verify ui_url is None even though application_id was set
+        let res = server
+            .get(&format!("/apps/{}", app.id))
+            .add_header("REMOTE_USER", "testuser")
+            .await;
+
+        let updated_app = res.json::<ApplicationInfo>();
+        assert_eq!(updated_app.ui_url, None);
     }
 }

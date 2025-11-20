@@ -16,6 +16,7 @@ impl MigrationTrait for Migration {
                     .col(string(Application::Token))
                     .col(string(Application::State))
                     .col(string_null(Application::Address))
+                    .col(string_null(Application::ApplicationId))
                     .col(
                         timestamp_with_time_zone(Application::CreatedAt)
                             .default(Expr::current_timestamp()),
@@ -78,6 +79,7 @@ impl MigrationTrait for Migration {
     }
 }
 
+#[allow(clippy::enum_variant_names)]
 #[derive(DeriveIden)]
 enum Application {
     Table,
@@ -87,4 +89,5 @@ enum Application {
     State,
     Token,
     Address,
+    ApplicationId,
 }

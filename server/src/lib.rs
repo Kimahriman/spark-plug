@@ -70,7 +70,7 @@ impl Server {
         let launcher = SparkLauncher::from_config(&config);
         let user_auth = UserAuth::from_config(&config).await;
 
-        let router = get_router(user_auth, launcher, db.clone()).await;
+        let router = get_router(user_auth, launcher, db.clone(), config.clone()).await;
 
         let tls_acceptor = load_tls_acceptor(&config)?;
 

@@ -5,6 +5,7 @@ use figment::{
     providers::{Env, Format, Yaml},
 };
 use local_ip_address::local_ip;
+use minijinja::render;
 use serde::Deserialize;
 
 const DEFAULT_PORT: u16 = 8100;
@@ -32,23 +33,27 @@ pub struct KerberosConfig {
     pub renewal_interval: Option<u64>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct TlsConfig {
     pub key: String,
     pub cert: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct AuthConfig {
     pub name: String,
     pub options: Option<HashMap<String, String>>,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Clone, Deserialize, Default)]
 pub struct ProxyConfig {
     pub bind_host: Option<String>,
     pub bind_port: Option<u16>,
     pub callback_address: Option<String>,
+    // Optional template for constructing a Spark UI URL. Template should include
+    // a `{{ application_id }}` placeholder that will be replaced with the app id.
+    // Example: "https://knox.example.com/gateway/default/yarn/app/{{ application_id }}"
+    pub ui_url_template: Option<String>,
     pub plugin_path: Option<String>,
     pub launch_timeout: Option<u32>,
     pub session_timeout: Option<u32>,
@@ -87,5 +92,19 @@ impl ProxyConfig {
                 self.get_bind_port()
             )
         })
+    }
+
+    /// Render a UI URL for the provided application id using the configured
+    /// `ui_url_template`. If no template is configured or application_id is
+    /// None/empty, returns None.
+    pub fn render_ui_url(&self, application_id: Option<&str>) -> Option<String> {
+        let tpl = self.ui_url_template.as_ref()?;
+        let app_id = application_id?;
+        if app_id.is_empty() {
+            return None;
+        }
+
+        let rendered = render!(tpl, application_id => app_id);
+        Some(rendered)
     }
 }
