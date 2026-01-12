@@ -366,9 +366,11 @@ impl SparkLauncher {
                 "--archives".to_string(),
                 format!("{venv_tarball}#environment"),
             ]);
+            // Python workers get run with a session-specific sub directory
+            // so we need to get the environment from the parent directory
             configs.insert(
                 "spark.sql.execution.pyspark.python".to_string(),
-                "environment/bin/python".to_string(),
+                "../environment/bin/python".to_string(),
             );
         }
 
