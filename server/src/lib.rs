@@ -6,7 +6,7 @@ use std::time::Duration;
 use std::{fs, io};
 
 use axum::Router;
-use clap::{Parser, command};
+use clap::Parser;
 use config::{KerberosConfig, ProxyConfig};
 use futures::FutureExt;
 use http::StatusCode;
