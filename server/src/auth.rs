@@ -35,7 +35,7 @@ pub(crate) struct CurrentUserAuth {}
 
 impl UserAuthMethod for CurrentUserAuth {
     fn authorize_user(&self, _: &HeaderMap) -> Result<Option<String>> {
-        Ok(Some(whoami::username()))
+        Ok(Some(whoami::username()?))
     }
 }
 
