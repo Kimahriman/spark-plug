@@ -224,33 +224,50 @@ async fn delete_app<L: Launcher>(
     Path(app_id): Path<i32>,
     Extension(user): Extension<UserId>,
 ) -> Result<(), StatusCode> {
-    let model = application::ActiveModel {
-        id: ActiveValue::Set(app_id),
-        username: ActiveValue::Set(user.0),
-        ..Default::default()
-    };
+    let username = user.0;
 
-    let res = application::Entity::delete(model)
-        .exec_with_returning(&state.db)
+    let app = application::Entity::find()
+        .filter(application::Column::Username.eq(username.clone()))
+        .filter(application::Column::Id.eq(app_id))
+        .one(&state.db)
         .await
         .map_err(|e| {
-            error!("Failed to delete app from db: {e:?}");
+            error!("Failed to get application from db: {e:?}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let address = app.address.clone();
+    let token = app.token.clone();
+
+    application::Entity::update_many()
+        .col_expr(
+            application::Column::Address,
+            Expr::value::<Option<String>>(None),
+        )
+        .col_expr(
+            application::Column::State,
+            Expr::value(application::State::FINISHED),
+        )
+        .filter(application::Column::Id.eq(app_id))
+        .filter(application::Column::Username.eq(username))
+        .exec(&state.db)
+        .await
+        .map_err(|e| {
+            error!("Failed to mark app as finished: {e:?}");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    if let Some(app) = res {
-        if let Some(address) = app.address {
-            send_session_message(&address, &app.token, "stop")
-                .await
-                .map_err(|e| {
-                    error!("Failed to stop session: {e:?}");
-                    StatusCode::INTERNAL_SERVER_ERROR
-                })?;
-        }
-        Ok(())
-    } else {
-        Err(StatusCode::NOT_FOUND)
+    if let Some(address) = address {
+        send_session_message(&address, &token, "stop")
+            .await
+            .map_err(|e| {
+                error!("Failed to stop session: {e:?}");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
     }
+
+    Ok(())
 }
 
 async fn list_versions<L: Launcher>(State(state): State<AppStateDyn<L>>) -> Json<Vec<String>> {
@@ -489,6 +506,30 @@ mod test {
             .add_header("REMOTE_USER", "user1")
             .await
             .assert_json::<Vec<ApplicationInfo>>(&vec![app]);
+    }
+
+    #[tokio::test]
+    async fn test_delete_app_marks_finished() {
+        let server = create_test_server().await;
+
+        let res = server
+            .post("/apps")
+            .json(&CreateApplicationRequest::default())
+            .await;
+
+        res.assert_status(StatusCode::OK);
+        let app = res.json::<ApplicationInfo>();
+
+        server
+            .delete(&format!("/apps/{}", app.id))
+            .await
+            .assert_status(StatusCode::OK);
+
+        let res = server.get(&format!("/apps/{}", app.id)).await;
+        res.assert_status(StatusCode::OK);
+        let updated = res.json::<ApplicationInfo>();
+        assert_eq!(updated.state, "FINISHED");
+        assert!(!updated.active);
     }
 
     #[tokio::test]
