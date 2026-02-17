@@ -42,10 +42,12 @@ static PLUGIN_BINARY: Option<&[u8]> = None;
 pub trait Launcher: Clone + Send + Sync {
     fn get_versions(&self) -> Vec<String>;
 
+    #[allow(clippy::too_many_arguments)]
     async fn launch(
         &self,
         version_name: Option<&str>,
         session_id: i32,
+        app_name: Option<String>,
         username: String,
         token: String,
         user_config: HashMap<String, String>,
@@ -315,10 +317,12 @@ impl SparkLauncher {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_submit_command(
         &self,
         version: &SparkVersion,
         session_id: i32,
+        app_name: Option<String>,
         username: String,
         token: String,
         user_config: HashMap<String, String>,
@@ -329,7 +333,9 @@ impl SparkLauncher {
 
         let mut configs = Self::build_conf(version, user_config);
 
-        if !configs.contains_key(APP_NAME_CONFIG) {
+        if let Some(app_name) = app_name {
+            configs.insert(APP_NAME_CONFIG.to_string(), app_name);
+        } else if !configs.contains_key(APP_NAME_CONFIG) {
             configs.insert(
                 APP_NAME_CONFIG.to_string(),
                 format!("connect-proxy-session-{}", session_id),
@@ -417,6 +423,7 @@ impl Launcher for SparkLauncher {
         &self,
         version_name: Option<&str>,
         session_id: i32,
+        app_name: Option<String>,
         username: String,
         token: String,
         user_config: HashMap<String, String>,
@@ -455,6 +462,7 @@ impl Launcher for SparkLauncher {
         let (submit_path, args) = self.build_submit_command(
             version,
             session_id,
+            app_name,
             username,
             token,
             user_config,
@@ -554,6 +562,7 @@ mod test {
             .build_submit_command(
                 &launcher.versions[0],
                 1,
+                None,
                 "user".to_string(),
                 "abcd".to_string(),
                 HashMap::default(),
@@ -586,6 +595,39 @@ mod test {
         assert!(pairs.contains(&["--conf", &format!("{GRPC_PORT_CONFIG}=0")]));
 
         assert!(pairs.contains(&["--class", SERVER_CLASS]));
+    }
+
+    #[test]
+    fn test_build_command_uses_explicit_app_name() {
+        let launcher = SparkLauncher {
+            versions: vec![SparkVersion {
+                name: "default".to_string(),
+                home: "/opt/spark".to_string(),
+                ..Default::default()
+            }],
+            callback_addr: "http://localhost:8100".to_string(),
+            launch_timeout: 60,
+            session_timeout: 60,
+            plugin_path: "/path/to/plugin".to_string(),
+            plugin_temp_path: None,
+        };
+
+        let (_command, args) = launcher
+            .build_submit_command(
+                &launcher.versions[0],
+                1,
+                Some("custom-app-name".to_string()),
+                "user".to_string(),
+                "abcd".to_string(),
+                HashMap::default(),
+                None,
+            )
+            .unwrap();
+
+        let args_ref: Vec<&str> = args.iter().map(String::as_ref).collect();
+        let (pairs, _script) = args_ref.as_chunks::<2>();
+
+        assert!(pairs.contains(&["--conf", &format!("{APP_NAME_CONFIG}=custom-app-name")]));
     }
 
     #[test]

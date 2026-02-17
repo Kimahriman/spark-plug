@@ -9,9 +9,8 @@ use http::StatusCode;
 use log::error;
 use migration::Expr;
 use sea_orm::{
-    prelude::DateTimeUtc,
     ActiveEnum, ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseConnection, EntityTrait,
-    QueryFilter,
+    QueryFilter, prelude::DateTimeUtc,
 };
 use serde::{Deserialize, Serialize};
 use tower::ServiceBuilder;
@@ -65,6 +64,7 @@ struct AppStateDyn<L: Launcher + 'static> {
 
 #[derive(Default, Serialize, Deserialize)]
 struct CreateApplicationRequest {
+    name: Option<String>,
     version: Option<String>,
     config: Option<HashMap<String, String>>,
     python_packages: Option<Vec<String>>,
@@ -80,6 +80,7 @@ struct ListApplicationsRequest {
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct ApplicationInfo {
     id: i32,
+    name: Option<String>,
     token: String,
     state: String,
     active: bool,
@@ -92,11 +93,13 @@ async fn create_app<L: Launcher>(
     Extension(user): Extension<UserId>,
     Json(params): Json<CreateApplicationRequest>,
 ) -> Result<Json<ApplicationInfo>, StatusCode> {
+    let name = params.name;
     let token = Uuid::new_v4().to_string();
 
     let app = application::ActiveModel {
         // created_at: ActiveValue::Set(Utc::now()),
         username: ActiveValue::Set(user.0.clone()),
+        name: ActiveValue::Set(name.clone()),
         state: ActiveValue::Set(application::State::LAUNCHING),
         token: ActiveValue::Set(token.clone()),
         ..Default::default()
@@ -111,6 +114,7 @@ async fn create_app<L: Launcher>(
         .launch(
             params.version.as_ref().map(|s| s.as_ref()),
             res.id,
+            name,
             user.0,
             token,
             params.config.unwrap_or_default(),
@@ -164,6 +168,7 @@ async fn create_app<L: Launcher>(
 
     let info = ApplicationInfo {
         id: res.id,
+        name: res.name,
         token: res.token,
         state: res.state.to_value().to_string(),
         active: res.address.is_some(),
@@ -192,6 +197,7 @@ async fn get_app<L: Launcher>(
     let ui_url = state.config.render_ui_url(app.application_id.as_deref());
     let info = ApplicationInfo {
         id: app.id,
+        name: app.name,
         token: app.token,
         state: app.state.to_value().to_string(),
         active: app.address.is_some(),
@@ -230,17 +236,15 @@ async fn list_apps<L: Launcher>(
         query = query.filter(application::Column::CreatedAt.lte(created_at_before));
     }
 
-    let apps = query
-        .all(&state.db)
-        .await
-        .map_err(|e| {
-            error!("Failed to get applications from db: {e:?}");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let apps = query.all(&state.db).await.map_err(|e| {
+        error!("Failed to get applications from db: {e:?}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     let infos = apps
         .into_iter()
         .map(|app| ApplicationInfo {
             id: app.id,
+            name: app.name,
             token: app.token,
             state: app.state.to_value().to_string(),
             active: app.address.is_some(),
@@ -382,9 +386,7 @@ mod test {
     use crate::{
         auth::{CurrentUserAuth, RemoteUserAuth, UserAuth},
         entities::application,
-        routes::{
-            ApplicationCallbackRequest, ApplicationInfo, CreateApplicationRequest,
-        },
+        routes::{ApplicationCallbackRequest, ApplicationInfo, CreateApplicationRequest},
         test_utils::create_test_router_with_config,
     };
 
@@ -486,6 +488,28 @@ mod test {
             .add_header("REMOTE_USER", "user1")
             .await
             .assert_json::<Vec<ApplicationInfo>>(&vec![app]);
+    }
+
+    #[tokio::test]
+    async fn test_create_app_with_name() {
+        let server = create_test_server().await;
+
+        let res = server
+            .post("/apps")
+            .json(&CreateApplicationRequest {
+                name: Some("my-session".to_string()),
+                ..Default::default()
+            })
+            .await;
+
+        res.assert_status(StatusCode::OK);
+        let app = res.json::<ApplicationInfo>();
+        assert_eq!(app.name.as_deref(), Some("my-session"));
+
+        let res = server.get("/apps").await;
+        res.assert_status(StatusCode::OK);
+        let apps = res.json::<Vec<ApplicationInfo>>();
+        assert_eq!(apps[0].name.as_deref(), Some("my-session"));
     }
 
     #[tokio::test]
@@ -753,8 +777,16 @@ mod test {
             .json::<Vec<ApplicationInfo>>();
 
         assert_eq!(filtered.len(), 2);
-        assert!(filtered.iter().any(|a| a.id == running.id && a.state == "RUNNING"));
-        assert!(filtered.iter().any(|a| a.id == launching.id && a.state == "FINISHED"));
+        assert!(
+            filtered
+                .iter()
+                .any(|a| a.id == running.id && a.state == "RUNNING")
+        );
+        assert!(
+            filtered
+                .iter()
+                .any(|a| a.id == launching.id && a.state == "FINISHED")
+        );
     }
 
     #[tokio::test]

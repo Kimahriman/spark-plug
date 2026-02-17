@@ -23,6 +23,7 @@ pub struct Model {
     pub id: i32,
     pub created_at: DateTimeUtc,
     pub username: String,
+    pub name: Option<String>,
     pub state: State,
     pub token: String,
     pub address: Option<String>,

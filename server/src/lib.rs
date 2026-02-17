@@ -610,6 +610,7 @@ pub(crate) mod test_utils {
             &self,
             _version_name: Option<&str>,
             _session_id: i32,
+            _app_name: Option<String>,
             _username: String,
             _token: String,
             _user_config: HashMap<String, String>,

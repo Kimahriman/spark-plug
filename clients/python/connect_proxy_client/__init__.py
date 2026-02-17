@@ -13,10 +13,11 @@ from requests import Session
 class Application:
     id: int
     token: str
+    name: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Application":
-        return cls(data["id"], data["token"])
+        return cls(data["id"], data["token"], data.get("name"))
 
 
 class ConnectProxyClient:
@@ -27,11 +28,14 @@ class ConnectProxyClient:
 
     def create_application(
         self,
+        name: Optional[str] = None,
         version: Optional[str] = None,
         config: Optional[Dict[str, str]] = None,
         python_packages: Optional[List[str]] = None,
     ) -> Application:
         params: Dict[str, Any] = {}
+        if name is not None:
+            params["name"] = name
         if version is not None:
             params["version"] = version
         if config is not None:
