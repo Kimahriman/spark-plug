@@ -6,7 +6,7 @@ use std::time::Duration;
 use std::{fs, io};
 
 use axum::Router;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use config::{KerberosConfig, ProxyConfig};
 use futures::FutureExt;
 use http::StatusCode;
@@ -17,9 +17,14 @@ use hyper::{Request, Response};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
 use log::{debug, error, info, warn};
+use reqwest::ClientBuilder;
 use routes::get_router;
 use rustls_pemfile::{certs, private_key};
-use sea_orm::{ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::prelude::DateTimeUtc;
+use sea_orm::{
+    ActiveModelTrait, ActiveValue, ColumnTrait, Condition, Database, DatabaseConnection,
+    EntityTrait, QueryFilter,
+};
 use sea_orm_migration::MigratorTrait;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
@@ -50,6 +55,23 @@ pub struct Args {
     /// Path to the config file
     #[arg(short, long)]
     pub config_file: Option<String>,
+
+    #[command(subcommand)]
+    pub command: Option<ProxyCommand>,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum ProxyCommand {
+    /// Start the Spark Connect Proxy server
+    Start,
+    /// Delete failed/finished apps older than a threshold in seconds
+    Prune {
+        /// Minimum application age in seconds for deletion
+        #[arg(short = 's', long = "seconds")]
+        seconds: u64,
+    },
+    /// Probe running apps and mark unreachable ones as finished
+    Check,
 }
 
 pub struct Server {
@@ -83,7 +105,7 @@ impl Server {
     }
 
     pub async fn run(self) -> Result<(), anyhow::Error> {
-        Migrator::up(&self.db, None).await?;
+        self.ensure_db().await?;
 
         if let Some(kerberos_config) = self.config.kerberos_config.as_ref() {
             kerberos_creds_task(kerberos_config.clone());
@@ -140,6 +162,88 @@ impl Server {
 
         info!("All connections finished");
 
+        Ok(())
+    }
+
+    pub async fn prune(self, older_than_seconds: u64) -> Result<(), anyhow::Error> {
+        self.ensure_db().await?;
+
+        let cutoff = DateTimeUtc::from_timestamp(
+            (std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs() as i64)
+                .saturating_sub(older_than_seconds as i64),
+            0,
+        )
+        .ok_or_else(|| anyhow::anyhow!("Failed to create prune cutoff timestamp"))?;
+
+        let result = application::Entity::delete_many()
+            .filter(
+                Condition::any()
+                    .add(application::Column::State.eq(State::FAILED))
+                    .add(application::Column::State.eq(State::FINISHED)),
+            )
+            .filter(application::Column::CreatedAt.lte(cutoff))
+            .exec(&self.db)
+            .await?;
+        info!(
+            "Pruned {} failed/finished applications older than {older_than_seconds}s",
+            result.rows_affected
+        );
+
+        Ok(())
+    }
+
+    pub async fn check(self) -> Result<(), anyhow::Error> {
+        self.ensure_db().await?;
+
+        let running_apps = application::Entity::find()
+            .filter(application::Column::State.eq(State::RUNNING))
+            .all(&self.db)
+            .await?;
+
+        let mut finished_count = 0usize;
+        for app in running_apps {
+            let should_finish = match app.address.as_deref() {
+                Some(address) => {
+                    if let Err(e) = send_session_message(address, &app.token, "health").await {
+                        warn!(
+                            "Health check failed for app {} at {}: {e:?}. Marking as finished.",
+                            app.id, address
+                        );
+                        true
+                    } else {
+                        false
+                    }
+                }
+                None => {
+                    warn!(
+                        "App {} is RUNNING but has no address. Marking as finished.",
+                        app.id
+                    );
+                    true
+                }
+            };
+
+            if should_finish {
+                application::ActiveModel {
+                    id: ActiveValue::Set(app.id),
+                    state: ActiveValue::Set(State::FINISHED),
+                    address: ActiveValue::Set(None),
+                    ..Default::default()
+                }
+                .update(&self.db)
+                .await?;
+                finished_count += 1;
+            }
+        }
+
+        info!("Health check complete. Marked {finished_count} applications as finished.");
+        Ok(())
+    }
+
+    async fn ensure_db(&self) -> Result<(), anyhow::Error> {
+        Migrator::up(&self.db, None).await?;
         Ok(())
     }
 
@@ -205,6 +309,28 @@ impl Server {
             _ = terminate => {},
         }
     }
+}
+
+pub(crate) async fn send_session_message(
+    address: &str,
+    token: &str,
+    message: &str,
+) -> anyhow::Result<()> {
+    // Fake out a gRPC call that will get picked up by the server interceptor.
+    let client = ClientBuilder::new().http2_prior_knowledge().build()?;
+    let res = client
+        .post(format!(
+            "http://{address}/spark.connect.SparkConnectService/Config"
+        ))
+        .bearer_auth(token)
+        .header("X-Connect-Proxy", message)
+        .header("Content-Type", "application/grpc")
+        .header("TE", "trailers")
+        .send()
+        .await?;
+
+    res.error_for_status()?;
+    Ok(())
 }
 
 fn load_tls_acceptor(config: &ProxyConfig) -> Result<Option<TlsAcceptor>, io::Error> {
@@ -453,4 +579,211 @@ fn kerberos_creds_task(kerberos_config: KerberosConfig) {
             .await;
         }
     });
+}
+
+#[cfg(test)]
+pub(crate) mod test_utils {
+    use std::{collections::HashMap, io, sync::Arc, time::Duration};
+
+    use migration::{Migrator, MigratorTrait};
+    use sea_orm::{Database, DatabaseConnection};
+    use tokio::task::JoinHandle;
+
+    use crate::{
+        auth::{CurrentUserAuth, UserAuth},
+        launcher::Launcher,
+        routes::get_router,
+    };
+
+    use super::{ProxyConfig, Router, Server};
+
+    #[derive(Clone)]
+    pub(crate) struct MockLauncher;
+
+    #[async_trait::async_trait]
+    impl Launcher for MockLauncher {
+        fn get_versions(&self) -> Vec<String> {
+            vec!["4.0.0".to_string()]
+        }
+
+        async fn launch(
+            &self,
+            _version_name: Option<&str>,
+            _session_id: i32,
+            _username: String,
+            _token: String,
+            _user_config: HashMap<String, String>,
+            _python_packages: Option<Vec<String>>,
+        ) -> Result<JoinHandle<()>, io::Error> {
+            Ok(tokio::spawn(async {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+            }))
+        }
+    }
+
+    pub(crate) fn default_user_auth() -> UserAuth {
+        UserAuth {
+            auth_methods: vec![Arc::new(CurrentUserAuth {})],
+        }
+    }
+
+    pub(crate) async fn create_test_router_with_config(
+        config: ProxyConfig,
+        user_auth: UserAuth,
+    ) -> (Router, DatabaseConnection) {
+        let _ = env_logger::Builder::new()
+            .filter(Some("spark_connect_proxy"), log::LevelFilter::Debug)
+            .is_test(true)
+            .try_init();
+
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        Migrator::up(&db, None).await.unwrap();
+
+        let router = get_router(user_auth, MockLauncher, db.clone(), config).await;
+        (router, db)
+    }
+
+    pub(crate) async fn create_test_server_with_config(
+        config: ProxyConfig,
+        user_auth: UserAuth,
+    ) -> Server {
+        let (router, db) = create_test_router_with_config(config.clone(), user_auth).await;
+
+        Server {
+            config,
+            router,
+            db,
+            tls_acceptor: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use sea_orm::{ActiveModelTrait, ActiveValue, EntityTrait};
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::test_utils::{create_test_server_with_config, default_user_auth};
+
+    async fn create_test_server() -> Server {
+        create_test_server_with_config(
+            ProxyConfig {
+                store: Some("sqlite::memory:".to_string()),
+                ..Default::default()
+            },
+            default_user_auth(),
+        )
+        .await
+    }
+
+    async fn insert_app(
+        db: &DatabaseConnection,
+        state: State,
+        address: Option<&str>,
+        created_at: DateTimeUtc,
+    ) -> application::Model {
+        application::ActiveModel {
+            created_at: ActiveValue::Set(created_at),
+            username: ActiveValue::Set("test-user".to_string()),
+            state: ActiveValue::Set(state),
+            token: ActiveValue::Set(Uuid::new_v4().to_string()),
+            address: ActiveValue::Set(address.map(ToOwned::to_owned)),
+            application_id: ActiveValue::Set(None),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_prune() {
+        let server = create_test_server().await;
+        let db = server.db.clone();
+
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let old = DateTimeUtc::from_timestamp(now_secs - 120, 0).unwrap();
+        let recent = DateTimeUtc::from_timestamp(now_secs - 10, 0).unwrap();
+
+        let old_failed = insert_app(&db, State::FAILED, None, old).await;
+        let old_finished = insert_app(&db, State::FINISHED, None, old).await;
+        let recent_failed = insert_app(&db, State::FAILED, None, recent).await;
+        let old_running = insert_app(&db, State::RUNNING, Some("127.0.0.1:1"), old).await;
+
+        server.prune(60).await.unwrap();
+
+        assert!(
+            application::Entity::find_by_id(old_failed.id)
+                .one(&db)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            application::Entity::find_by_id(old_finished.id)
+                .one(&db)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            application::Entity::find_by_id(recent_failed.id)
+                .one(&db)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            application::Entity::find_by_id(old_running.id)
+                .one(&db)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_check() {
+        let server = create_test_server().await;
+        let db = server.db.clone();
+
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let now = DateTimeUtc::from_timestamp(now_secs, 0).unwrap();
+
+        let no_address_running = insert_app(&db, State::RUNNING, None, now).await;
+        let unreachable_running = insert_app(&db, State::RUNNING, Some("127.0.0.1:9"), now).await;
+        let launching = insert_app(&db, State::LAUNCHING, None, now).await;
+
+        server.check().await.unwrap();
+
+        let no_address_after = application::Entity::find_by_id(no_address_running.id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(no_address_after.state, State::FINISHED);
+        assert_eq!(no_address_after.address, None);
+
+        let unreachable_after = application::Entity::find_by_id(unreachable_running.id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(unreachable_after.state, State::FINISHED);
+        assert_eq!(unreachable_after.address, None);
+
+        let launching_after = application::Entity::find_by_id(launching.id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(launching_after.state, State::LAUNCHING);
+    }
 }

@@ -8,7 +8,6 @@ use axum::{
 use http::StatusCode;
 use log::error;
 use migration::Expr;
-use reqwest::ClientBuilder;
 use sea_orm::{
     ActiveEnum, ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseConnection, EntityTrait,
     QueryFilter,
@@ -23,6 +22,7 @@ use crate::{
     config::ProxyConfig,
     entities::application,
     launcher::Launcher,
+    send_session_message,
 };
 
 pub(crate) async fn get_router<L>(
@@ -339,79 +339,26 @@ async fn app_callback_delete<L: Launcher>(
     }
 }
 
-async fn send_session_message(address: &str, token: &str, message: &str) -> anyhow::Result<()> {
-    // Fake out a gRPC call that will get picked up by the server interceptor
-    let client = ClientBuilder::new().http2_prior_knowledge().build()?;
-    let res = client
-        .post(format!(
-            "http://{address}/spark.connect.SparkConnectService/Config"
-        ))
-        .bearer_auth(token)
-        .header("X-Connect-Proxy", message)
-        .header("Content-Type", "application/grpc")
-        .header("TE", "trailers")
-        .send()
-        .await?;
-
-    res.error_for_status()?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod test {
-    use std::{sync::Arc, time::Duration};
+    use std::sync::Arc;
 
     use axum_test::TestServer;
     use http::StatusCode;
-    use migration::{Migrator, MigratorTrait};
-    use sea_orm::Database;
-    use tokio::task::JoinHandle;
 
     use crate::{
         auth::{CurrentUserAuth, RemoteUserAuth, UserAuth},
-        launcher::Launcher,
-        routes::{
-            ApplicationCallbackRequest, ApplicationInfo, CreateApplicationRequest, get_router,
-        },
+        routes::{ApplicationCallbackRequest, ApplicationInfo, CreateApplicationRequest},
+        test_utils::create_test_router_with_config,
     };
-
-    #[derive(Clone)]
-    struct MockLauncher {}
-
-    #[async_trait::async_trait]
-    impl Launcher for MockLauncher {
-        fn get_versions(&self) -> Vec<String> {
-            vec!["4.0.0".to_string()]
-        }
-
-        async fn launch(
-            &self,
-            _version_name: Option<&str>,
-            _session_id: i32,
-            _username: String,
-            _token: String,
-            _user_config: std::collections::HashMap<String, String>,
-            _python_packages: Option<Vec<String>>,
-        ) -> Result<JoinHandle<()>, std::io::Error> {
-            Ok(tokio::spawn(async {
-                tokio::time::sleep(Duration::from_secs(60)).await;
-            }))
-        }
-    }
 
     async fn create_test_server() -> TestServer {
         create_test_server_with_config(crate::config::ProxyConfig::default()).await
     }
 
     async fn create_test_server_with_config(config: crate::config::ProxyConfig) -> TestServer {
-        let _ = env_logger::Builder::new()
-            .filter(Some("spark_connect_proxy"), log::LevelFilter::Debug)
-            .is_test(true)
-            .try_init();
-
-        let db = Database::connect("sqlite::memory:").await.unwrap();
-        Migrator::up(&db, None).await.unwrap();
-        let router = get_router(
+        let (router, _db) = create_test_router_with_config(
+            config,
             UserAuth {
                 auth_methods: vec![
                     Arc::new(RemoteUserAuth {
@@ -420,9 +367,6 @@ mod test {
                     Arc::new(CurrentUserAuth {}),
                 ],
             },
-            MockLauncher {},
-            db,
-            config,
         )
         .await;
 

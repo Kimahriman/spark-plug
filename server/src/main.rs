@@ -1,5 +1,5 @@
 use clap::Parser;
-use spark_connect_proxy::{Args, Server, config::ProxyConfig};
+use spark_connect_proxy::{Args, ProxyCommand, Server, config::ProxyConfig};
 
 #[tokio::main]
 pub async fn main() -> Result<(), anyhow::Error> {
@@ -9,6 +9,13 @@ pub async fn main() -> Result<(), anyhow::Error> {
 
     let args = Args::parse();
     let config = ProxyConfig::create(args.config_file);
+    let command = args.command.unwrap_or(ProxyCommand::Start);
 
-    Server::from_config(config).await?.run().await
+    let server = Server::from_config(config).await?;
+
+    match command {
+        ProxyCommand::Start => server.run().await,
+        ProxyCommand::Prune { seconds } => server.prune(seconds).await,
+        ProxyCommand::Check => server.check().await,
+    }
 }
