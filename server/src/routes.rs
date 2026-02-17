@@ -2,13 +2,14 @@ use std::{collections::HashMap, sync::Arc};
 
 use axum::{
     Extension, Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     routing::{get, post},
 };
 use http::StatusCode;
 use log::error;
 use migration::Expr;
 use sea_orm::{
+    prelude::DateTimeUtc,
     ActiveEnum, ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseConnection, EntityTrait,
     QueryFilter,
 };
@@ -67,6 +68,13 @@ struct CreateApplicationRequest {
     version: Option<String>,
     config: Option<HashMap<String, String>>,
     python_packages: Option<Vec<String>>,
+}
+
+#[derive(Default, Deserialize)]
+struct ListApplicationsRequest {
+    state: Option<String>,
+    created_at_after: Option<DateTimeUtc>,
+    created_at_before: Option<DateTimeUtc>,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -196,9 +204,33 @@ async fn get_app<L: Launcher>(
 async fn list_apps<L: Launcher>(
     State(state): State<AppStateDyn<L>>,
     Extension(user): Extension<UserId>,
+    Query(params): Query<ListApplicationsRequest>,
 ) -> Result<Json<Vec<ApplicationInfo>>, StatusCode> {
-    let apps = application::Entity::find()
-        .filter(application::Column::Username.eq(user.0))
+    let mut query = application::Entity::find().filter(application::Column::Username.eq(user.0));
+
+    if let Some(state_filters) = params.state {
+        let mut parsed_states = Vec::new();
+        for state in state_filters.split(',') {
+            let state = state.trim();
+            if state.is_empty() {
+                continue;
+            }
+            let parsed = application::State::try_from_value(&state.to_string())
+                .map_err(|_| StatusCode::BAD_REQUEST)?;
+            parsed_states.push(parsed);
+        }
+        if !parsed_states.is_empty() {
+            query = query.filter(application::Column::State.is_in(parsed_states));
+        }
+    }
+    if let Some(created_at_after) = params.created_at_after {
+        query = query.filter(application::Column::CreatedAt.gte(created_at_after));
+    }
+    if let Some(created_at_before) = params.created_at_before {
+        query = query.filter(application::Column::CreatedAt.lte(created_at_before));
+    }
+
+    let apps = query
         .all(&state.db)
         .await
         .map_err(|e| {
@@ -345,10 +377,14 @@ mod test {
 
     use axum_test::TestServer;
     use http::StatusCode;
+    use sea_orm::{ActiveModelTrait, ActiveValue, prelude::DateTimeUtc};
 
     use crate::{
         auth::{CurrentUserAuth, RemoteUserAuth, UserAuth},
-        routes::{ApplicationCallbackRequest, ApplicationInfo, CreateApplicationRequest},
+        entities::application,
+        routes::{
+            ApplicationCallbackRequest, ApplicationInfo, CreateApplicationRequest,
+        },
         test_utils::create_test_router_with_config,
     };
 
@@ -631,5 +667,188 @@ mod test {
 
         let updated_app = res.json::<ApplicationInfo>();
         assert_eq!(updated_app.ui_url, None);
+    }
+
+    #[tokio::test]
+    async fn test_list_apps_filters_by_state() {
+        let server = create_test_server().await;
+
+        let launching = server
+            .post("/apps")
+            .add_header("REMOTE_USER", "user1")
+            .json(&CreateApplicationRequest::default())
+            .await
+            .json::<ApplicationInfo>();
+
+        let running = server
+            .post("/apps")
+            .add_header("REMOTE_USER", "user1")
+            .json(&CreateApplicationRequest::default())
+            .await
+            .json::<ApplicationInfo>();
+        server
+            .post("/callback")
+            .authorization_bearer(running.token.clone())
+            .json(&ApplicationCallbackRequest {
+                address: "localhost:9999".to_string(),
+                application_id: "spark-app-running".to_string(),
+            })
+            .await
+            .assert_status(StatusCode::OK);
+
+        server
+            .delete(&format!("/apps/{}", launching.id))
+            .add_header("REMOTE_USER", "user1")
+            .await
+            .assert_status(StatusCode::OK);
+
+        let filtered = server
+            .get("/apps?state=RUNNING")
+            .add_header("REMOTE_USER", "user1")
+            .await
+            .json::<Vec<ApplicationInfo>>();
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, running.id);
+        assert_eq!(filtered[0].state, "RUNNING");
+    }
+
+    #[tokio::test]
+    async fn test_list_apps_filters_by_multiple_states() {
+        let server = create_test_server().await;
+
+        let launching = server
+            .post("/apps")
+            .add_header("REMOTE_USER", "user1")
+            .json(&CreateApplicationRequest::default())
+            .await
+            .json::<ApplicationInfo>();
+
+        let running = server
+            .post("/apps")
+            .add_header("REMOTE_USER", "user1")
+            .json(&CreateApplicationRequest::default())
+            .await
+            .json::<ApplicationInfo>();
+        server
+            .post("/callback")
+            .authorization_bearer(running.token.clone())
+            .json(&ApplicationCallbackRequest {
+                address: "localhost:8765".to_string(),
+                application_id: "spark-app-running-multi".to_string(),
+            })
+            .await
+            .assert_status(StatusCode::OK);
+
+        server
+            .delete(&format!("/apps/{}", launching.id))
+            .add_header("REMOTE_USER", "user1")
+            .await
+            .assert_status(StatusCode::OK);
+
+        let filtered = server
+            .get("/apps?state=RUNNING,FINISHED")
+            .add_header("REMOTE_USER", "user1")
+            .await
+            .json::<Vec<ApplicationInfo>>();
+
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().any(|a| a.id == running.id && a.state == "RUNNING"));
+        assert!(filtered.iter().any(|a| a.id == launching.id && a.state == "FINISHED"));
+    }
+
+    #[tokio::test]
+    async fn test_list_apps_filters_by_created_at() {
+        let (router, db) = create_test_router_with_config(
+            crate::config::ProxyConfig::default(),
+            UserAuth {
+                auth_methods: vec![
+                    Arc::new(RemoteUserAuth {
+                        header: "REMOTE_USER".to_string(),
+                    }),
+                    Arc::new(CurrentUserAuth {}),
+                ],
+            },
+        )
+        .await;
+        let server = TestServer::new(router).unwrap();
+
+        let first = server
+            .post("/apps")
+            .add_header("REMOTE_USER", "user1")
+            .json(&CreateApplicationRequest::default())
+            .await
+            .json::<ApplicationInfo>();
+
+        let second = server
+            .post("/apps")
+            .add_header("REMOTE_USER", "user1")
+            .json(&CreateApplicationRequest::default())
+            .await
+            .json::<ApplicationInfo>();
+
+        let first_created_at = DateTimeUtc::from_timestamp(1_700_000_000, 0).unwrap();
+        let second_created_at = DateTimeUtc::from_timestamp(1_700_000_060, 0).unwrap();
+        application::ActiveModel {
+            id: ActiveValue::Set(first.id),
+            created_at: ActiveValue::Set(first_created_at),
+            ..Default::default()
+        }
+        .update(&db)
+        .await
+        .unwrap();
+        application::ActiveModel {
+            id: ActiveValue::Set(second.id),
+            created_at: ActiveValue::Set(second_created_at),
+            ..Default::default()
+        }
+        .update(&db)
+        .await
+        .unwrap();
+
+        let first_ts = first_created_at.to_rfc3339().replace('+', "%2B");
+        let second_ts = second_created_at.to_rfc3339().replace('+', "%2B");
+
+        let exact_first = format!(
+            "/apps?created_at_after={}&created_at_before={}",
+            first_ts, first_ts
+        );
+        let exact_second = format!(
+            "/apps?created_at_after={}&created_at_before={}",
+            second_ts, second_ts
+        );
+
+        let first_apps = server
+            .get(&exact_first)
+            .add_header("REMOTE_USER", "user1")
+            .await
+            .json::<Vec<ApplicationInfo>>();
+        assert_eq!(first_apps.len(), 1);
+        assert_eq!(first_apps[0].id, first.id);
+
+        let second_apps = server
+            .get(&exact_second)
+            .add_header("REMOTE_USER", "user1")
+            .await
+            .json::<Vec<ApplicationInfo>>();
+        assert_eq!(second_apps.len(), 1);
+        assert_eq!(second_apps[0].id, second.id);
+    }
+
+    #[tokio::test]
+    async fn test_list_apps_invalid_filter_rejected() {
+        let server = create_test_server().await;
+
+        server
+            .get("/apps?state=NOT_A_STATE")
+            .add_header("REMOTE_USER", "user1")
+            .await
+            .assert_status(StatusCode::BAD_REQUEST);
+
+        server
+            .get("/apps?created_at_after=not-a-timestamp")
+            .add_header("REMOTE_USER", "user1")
+            .await
+            .assert_status(StatusCode::BAD_REQUEST);
     }
 }
