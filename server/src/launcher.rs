@@ -188,9 +188,14 @@ impl SparkLauncher {
         // Merge any comma-separated configs
         if let Some(merge_configs) = version.merge_configs.as_ref() {
             for (key, value) in merge_configs.iter() {
-                if let Some(existing) = configs.get(key) {
-                    configs.insert(key.to_string(), format!("{existing},{value}"));
-                }
+                match configs.get(key) {
+                    Some(existing) => {
+                        configs.insert(key.to_string(), format!("{existing},{value}"));
+                    }
+                    None => {
+                        configs.insert(key.to_string(), value.to_string());
+                    }
+                };
             }
         }
 
@@ -508,7 +513,10 @@ mod test {
                 .collect(),
             ),
             merge_configs: Some(
-                vec![("c".to_string(), "merge".to_string())]
+                vec![
+                    ("c".to_string(), "merge".to_string()),
+                    ("e".to_string(), "merge-only".to_string()),
+                ]
                     .into_iter()
                     .collect(),
             ),
@@ -536,7 +544,8 @@ mod test {
                 ("a".to_string(), "user".to_string()),
                 ("b".to_string(), "default".to_string()),
                 ("c".to_string(), "user,merge".to_string()),
-                ("d".to_string(), "override".to_string())
+                ("d".to_string(), "override".to_string()),
+                ("e".to_string(), "merge-only".to_string()),
             ]
             .into_iter()
             .collect()
