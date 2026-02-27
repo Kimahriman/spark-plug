@@ -517,8 +517,8 @@ mod test {
                     ("c".to_string(), "merge".to_string()),
                     ("e".to_string(), "merge-only".to_string()),
                 ]
-                    .into_iter()
-                    .collect(),
+                .into_iter()
+                .collect(),
             ),
             override_configs: Some(
                 vec![("d".to_string(), "override".to_string())]
