@@ -171,7 +171,7 @@ impl UserAuthMethod for JWKSAuth {
                     "jwt refer to a unknown key id".to_string(),
                 ))?;
 
-            let mut validation = Validation::new(jwk.alg.to_string().parse()?);
+            let mut validation = Validation::new(header.alg);
             if let Some(audience) = self.audience.as_ref() {
                 validation.set_audience(&[audience]);
             }
