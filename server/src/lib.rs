@@ -9,8 +9,11 @@ use axum::Router;
 use clap::{Parser, Subcommand};
 use config::{KerberosConfig, ProxyConfig};
 use futures::FutureExt;
+use http::HeaderMap;
 use http::StatusCode;
 use http::header::AUTHORIZATION;
+use http::header::CONTENT_TYPE;
+use http::header::{HeaderName, HeaderValue};
 use hyper::body::Incoming;
 use hyper::service::Service;
 use hyper::{Request, Response};
@@ -39,6 +42,7 @@ use migration::Migrator;
 
 use crate::auth::UserAuth;
 use crate::entities::application::{self, State};
+use crate::error::Error as ProxyError;
 use crate::launcher::SparkLauncher;
 
 mod auth;
@@ -355,64 +359,141 @@ fn load_tls_acceptor(config: &ProxyConfig) -> Result<Option<TlsAcceptor>, io::Er
 
 type UpstreamMessage = (
     Request<Incoming>,
-    oneshot::Sender<Result<Response<axum::body::Body>, hyper::Error>>,
+    oneshot::Sender<Result<Response<axum::body::Body>, ProxyError>>,
 );
+
+fn proxy_error_response(error: ProxyError) -> Response<axum::body::Body> {
+    const GRPC_STATUS: HeaderName = HeaderName::from_static("grpc-status");
+    const GRPC_MESSAGE: HeaderName = HeaderName::from_static("grpc-message");
+
+    let grpc_status = match &error {
+        ProxyError::MissingAuthorizationHeader => "16",
+        ProxyError::InvalidAuthorizationHeader(_) => "16",
+        ProxyError::InvalidAuthorizationScheme => "16",
+        ProxyError::ApplicationNotFound => "5",
+        ProxyError::MissingApplicationAddress => "14",
+        ProxyError::InvalidApplicationState(State::LAUNCHING) => "14",
+        ProxyError::InvalidApplicationState(_) => "9",
+        ProxyError::Database(_) => "13",
+        ProxyError::UpstreamConnect(_) => "14",
+        ProxyError::UpstreamHandshake(_) => "14",
+        ProxyError::InvalidUpstreamUri(_) => "13",
+        ProxyError::UpstreamRequest(_) => "14",
+        ProxyError::Authorization(_) => "16",
+    };
+    let grpc_message = percent_encode_grpc_message(&error.to_string());
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "application/grpc")
+        .header(GRPC_STATUS, grpc_status)
+        .header(
+            GRPC_MESSAGE,
+            HeaderValue::from_str(&grpc_message)
+                .unwrap_or_else(|_| HeaderValue::from_static("proxy%20error")),
+        )
+        .body(axum::body::Body::empty())
+        .unwrap()
+}
+
+fn percent_encode_grpc_message(message: &str) -> String {
+    let mut encoded = String::with_capacity(message.len());
+
+    for byte in message.bytes() {
+        match byte {
+            b' '..=b'~' if byte != b'%' => encoded.push(byte as char),
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+
+    encoded
+}
+
+fn extract_bearer_token(headers: &HeaderMap) -> Result<String, ProxyError> {
+    let authorization = headers
+        .get(AUTHORIZATION)
+        .ok_or(ProxyError::MissingAuthorizationHeader)?;
+    let authorization = authorization
+        .to_str()
+        .map_err(|err| ProxyError::InvalidAuthorizationHeader(err.to_string()))?;
+
+    match authorization.split_once(' ') {
+        Some(("Bearer", token)) if !token.is_empty() => Ok(token.to_string()),
+        Some(("Bearer", _)) => Err(ProxyError::InvalidAuthorizationHeader(
+            "missing bearer token".to_string(),
+        )),
+        Some(_) => Err(ProxyError::InvalidAuthorizationScheme),
+        None => Err(ProxyError::InvalidAuthorizationHeader(
+            "expected `Bearer <token>`".to_string(),
+        )),
+    }
+}
+
+async fn resolve_upstream_connection(
+    rx: &mpsc::UnboundedReceiver<UpstreamMessage>,
+    token: &str,
+    db: &DatabaseConnection,
+) -> Result<(hyper::client::conn::http2::SendRequest<Incoming>, String), ProxyError> {
+    let address = loop {
+        if rx.is_closed() {
+            return Err(ProxyError::ApplicationNotFound);
+        }
+
+        let app = application::Entity::find()
+            .filter(application::Column::Token.eq(token))
+            .one(db)
+            .await?
+            .ok_or(ProxyError::ApplicationNotFound)?;
+
+        match app.state {
+            State::RUNNING => {
+                break app.address.ok_or(ProxyError::MissingApplicationAddress)?;
+            }
+            State::LAUNCHING => tokio::time::sleep(Duration::from_secs(1)).await,
+            state => return Err(ProxyError::InvalidApplicationState(state)),
+        }
+    };
+
+    let client_stream = TcpStream::connect(&address)
+        .await
+        .map_err(ProxyError::UpstreamConnect)?;
+    let io = TokioIo::new(client_stream);
+
+    let (sender, conn) = hyper::client::conn::http2::handshake(TokioExecutor::new(), io)
+        .await
+        .map_err(ProxyError::UpstreamHandshake)?;
+    tokio::task::spawn(async move {
+        debug!("Spawned connection await");
+        let res = conn.await;
+        debug!("Upstream connection closed: {res:?}");
+        if let Err(err) = res {
+            warn!("Upstream connection failed: {err:?}");
+        }
+    });
+
+    Ok((sender, address))
+}
 
 async fn upstream_connection(
     mut rx: mpsc::UnboundedReceiver<UpstreamMessage>,
     token: String,
     db: DatabaseConnection,
 ) {
-    let (mut sender, address) = {
-        let address = loop {
-            if rx.is_closed() {
-                return;
-            }
-
-            let app = match application::Entity::find()
-                .filter(application::Column::Token.eq(&token))
-                .one(&db)
-                .await
-            {
-                Ok(Some(app)) => app,
-                Ok(None) => {
-                    error!("Failed to find application for token {token}");
-                    return;
-                }
-                Err(e) => {
-                    error!("Failed to retrieve application by token: {e:?}");
-                    return;
-                }
-            };
-
-            match app.state {
-                State::RUNNING => break app.address.unwrap(),
-                State::LAUNCHING => tokio::time::sleep(Duration::from_secs(1)).await,
-                state => {
-                    error!("Cannot connect to an application in state {state:?}");
-                    return;
-                }
-            }
-        };
-
-        let client_stream = TcpStream::connect(&address).await.unwrap();
-        let io = TokioIo::new(client_stream);
-
-        let (sender, conn) = hyper::client::conn::http2::handshake(TokioExecutor::new(), io)
-            .await
-            .unwrap();
-        tokio::task::spawn(async move {
-            debug!("Spawned connection await");
-            let res = conn.await;
-            debug!("Upstream connection closed: {res:?}");
-            if let Err(err) = res {
-                warn!("Upstream connection failed: {err:?}");
-            }
-        });
-        (sender, address)
-    };
+    let mut upstream = None;
 
     while let Some((mut req, tx)) = rx.recv().await {
+        if upstream.is_none() {
+            match resolve_upstream_connection(&rx, &token, &db).await {
+                Ok(connection) => upstream = Some(connection),
+                Err(error) => {
+                    warn!("Failed to initialize upstream connection for proxy request: {error}");
+                    let _ = tx.send(Err(error));
+                    continue;
+                }
+            }
+        }
+
+        let (sender, address) = upstream.as_mut().unwrap();
         let uri_string = format!(
             "http://{address}{}",
             req.uri()
@@ -420,18 +501,32 @@ async fn upstream_connection(
                 .map(|x| x.as_str())
                 .unwrap_or("/")
         );
-        *req.uri_mut() = uri_string.parse().unwrap();
+        let uri = match uri_string.parse() {
+            Ok(uri) => uri,
+            Err(err) => {
+                let _ = tx.send(Err(ProxyError::InvalidUpstreamUri(err)));
+                continue;
+            }
+        };
+        *req.uri_mut() = uri;
 
         debug!("Proxying request {:?}", req.uri().path_and_query());
 
         let response = sender
             .send_request(req)
             .await
-            .map(|response| response.map(axum::body::Body::new));
+            .map(|response| response.map(axum::body::Body::new))
+            .map_err(ProxyError::UpstreamRequest);
 
         debug!("Proxying response {response:?}");
 
-        tx.send(response).unwrap();
+        if response.is_err() {
+            upstream = None;
+        }
+
+        if tx.send(response).is_err() {
+            debug!("Request receiver dropped before upstream response was delivered");
+        }
     }
 
     debug!("rx closed for upstream");
@@ -462,30 +557,14 @@ impl ProxyService {
     fn dispatch(
         &self,
         req: Request<Incoming>,
-    ) -> oneshot::Receiver<Result<Response<axum::body::Body>, hyper::Error>> {
+    ) -> oneshot::Receiver<Result<Response<axum::body::Body>, ProxyError>> {
         let mut dispatch = self.dispatch.lock().unwrap();
         let (tx, rx) = oneshot::channel();
         if dispatch.is_none() {
-            let authorization = if let Some(auth) = req.headers().get(AUTHORIZATION) {
-                auth.to_str().unwrap().to_string()
-            } else {
-                let response = Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(().into())
-                    .unwrap();
-                tx.send(Ok(response)).unwrap();
-                return rx;
-            };
-
-            let split = authorization.split_once(' ');
-            let token = match split {
-                Some(("Bearer", token)) => token.to_string(),
-                _ => {
-                    let response = Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .body(().into())
-                        .unwrap();
-                    tx.send(Ok(response)).unwrap();
+            let token = match extract_bearer_token(req.headers()) {
+                Ok(token) => token,
+                Err(error) => {
+                    let _ = tx.send(Err(error));
                     return rx;
                 }
             };
@@ -501,11 +580,7 @@ impl ProxyService {
         match dispatch.as_mut().unwrap().send((req, tx)) {
             Ok(_) => rx,
             Err(mpsc::error::SendError((_, tx))) => {
-                tx.send(Ok(Response::builder()
-                    .status(StatusCode::NOT_FOUND)
-                    .body(().into())
-                    .unwrap()))
-                    .unwrap();
+                let _ = tx.send(Err(ProxyError::ApplicationNotFound));
                 rx
             }
         }
@@ -530,11 +605,12 @@ impl Service<Request<hyper::body::Incoming>> for ProxyService {
             let rx = self.dispatch(req);
             Box::pin(async move {
                 match rx.await {
-                    Ok(res) => Ok(res?.map(axum::body::Body::new)),
-                    Err(_) => Ok(Response::builder()
-                        .status(StatusCode::NOT_FOUND)
-                        .body(().into())
-                        .unwrap()),
+                    Ok(Ok(res)) => Ok(res),
+                    Ok(Err(error)) => {
+                        warn!("Proxy request failed: {error}");
+                        Ok(proxy_error_response(error))
+                    }
+                    Err(_) => Ok(proxy_error_response(ProxyError::ApplicationNotFound)),
                 }
             })
         } else {
@@ -786,5 +862,66 @@ mod test {
             .unwrap()
             .unwrap();
         assert_eq!(launching_after.state, State::LAUNCHING);
+    }
+
+    #[test]
+    fn test_extract_bearer_token() {
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTHORIZATION, "Bearer test-token".parse().unwrap());
+
+        assert_eq!(extract_bearer_token(&headers).unwrap(), "test-token");
+    }
+
+    #[test]
+    fn test_extract_bearer_token_rejects_invalid_headers() {
+        assert!(matches!(
+            extract_bearer_token(&HeaderMap::new()),
+            Err(ProxyError::MissingAuthorizationHeader)
+        ));
+
+        let mut wrong_scheme = HeaderMap::new();
+        wrong_scheme.insert(AUTHORIZATION, "Basic abc123".parse().unwrap());
+        assert!(matches!(
+            extract_bearer_token(&wrong_scheme),
+            Err(ProxyError::InvalidAuthorizationScheme)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_proxy_error_response_maps_status() {
+        let not_found = proxy_error_response(ProxyError::ApplicationNotFound);
+        assert_eq!(not_found.status(), StatusCode::OK);
+        assert_eq!(
+            not_found.headers().get(CONTENT_TYPE).unwrap(),
+            "application/grpc"
+        );
+        assert_eq!(not_found.headers().get("grpc-status").unwrap(), "5");
+        assert_eq!(
+            not_found.headers().get("grpc-message").unwrap(),
+            "application not found for provided token"
+        );
+
+        let launching = proxy_error_response(ProxyError::InvalidApplicationState(State::LAUNCHING));
+        assert_eq!(launching.status(), StatusCode::OK);
+        assert_eq!(launching.headers().get("grpc-status").unwrap(), "14");
+
+        let missing_address = proxy_error_response(ProxyError::MissingApplicationAddress);
+        assert_eq!(missing_address.status(), StatusCode::OK);
+        assert_eq!(missing_address.headers().get("grpc-status").unwrap(), "14");
+
+        let auth = proxy_error_response(ProxyError::Authorization("missing subject".into()));
+        assert_eq!(auth.headers().get("grpc-status").unwrap(), "16");
+        assert_eq!(
+            auth.headers().get("grpc-message").unwrap(),
+            "authorization error: missing subject"
+        );
+    }
+
+    #[test]
+    fn test_percent_encode_grpc_message() {
+        assert_eq!(
+            percent_encode_grpc_message("upstream failed: bad\nstate % value"),
+            "upstream failed: bad%0Astate %25 value"
+        );
     }
 }

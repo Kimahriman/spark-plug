@@ -224,6 +224,14 @@ cargo test --lib # Unit tests
 uv run cargo test --test test_integration # Integration test with default PySpark in venv
 ```
 
+## Linting
+
+```bash
+cargo clippy
+cargo fmt --check # Check if formatting is valid
+cargo fmt # Fix invalid formatting
+```
+
 ## Troubleshooting
 
 | Issue | Cause | Fix |

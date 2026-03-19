@@ -159,7 +159,7 @@ impl UserAuthMethod for JWKSAuth {
             let kid = header
                 .kid
                 .as_ref()
-                .ok_or(crate::error::Error::AuthorizationError(
+                .ok_or(crate::error::Error::Authorization(
                     "jwt header should have a kid".to_string(),
                 ))?;
 
@@ -167,7 +167,7 @@ impl UserAuthMethod for JWKSAuth {
                 .jwks
                 .keys
                 .get(kid)
-                .ok_or(crate::error::Error::AuthorizationError(
+                .ok_or(crate::error::Error::Authorization(
                     "jwt refer to a unknown key id".to_string(),
                 ))?;
 
