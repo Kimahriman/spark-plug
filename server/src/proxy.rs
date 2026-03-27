@@ -14,6 +14,7 @@ use hyper::service::Service;
 use hyper::{Request, Response};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use log::{debug, warn};
+use migration::Expr;
 use reqwest::ClientBuilder;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use tokio::net::TcpStream;
@@ -27,6 +28,14 @@ type UpstreamMessage = (
     Request<Incoming>,
     oneshot::Sender<Result<Response<axum::body::Body>, ProxyError>>,
 );
+
+const MAX_UPSTREAM_CONNECT_RETRIES: usize = 3;
+
+#[cfg(test)]
+const UPSTREAM_CONNECT_RETRY_DELAY: Duration = Duration::from_millis(10);
+
+#[cfg(not(test))]
+const UPSTREAM_CONNECT_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 pub(crate) struct ProxyService {
     id: u64,
@@ -213,12 +222,12 @@ fn extract_bearer_token(headers: &HeaderMap) -> Result<String, ProxyError> {
     }
 }
 
-async fn resolve_upstream_connection(
+async fn resolve_upstream_address(
     rx: &mpsc::UnboundedReceiver<UpstreamMessage>,
     token: &str,
     db: &DatabaseConnection,
-) -> Result<(hyper::client::conn::http2::SendRequest<Incoming>, String), ProxyError> {
-    let address = loop {
+) -> Result<String, ProxyError> {
+    loop {
         if rx.is_closed() {
             return Err(ProxyError::ApplicationNotFound);
         }
@@ -231,13 +240,17 @@ async fn resolve_upstream_connection(
 
         match app.state {
             State::RUNNING => {
-                break app.address.ok_or(ProxyError::MissingApplicationAddress)?;
+                return app.address.ok_or(ProxyError::MissingApplicationAddress);
             }
             State::LAUNCHING => tokio::time::sleep(Duration::from_secs(1)).await,
             state => return Err(ProxyError::InvalidApplicationState(state)),
         }
-    };
+    }
+}
 
+async fn connect_upstream(
+    address: &str,
+) -> Result<hyper::client::conn::http2::SendRequest<Incoming>, ProxyError> {
     let client_stream = TcpStream::connect(&address)
         .await
         .map_err(ProxyError::UpstreamConnect)?;
@@ -255,7 +268,52 @@ async fn resolve_upstream_connection(
         }
     });
 
-    Ok((sender, address))
+    Ok(sender)
+}
+
+async fn mark_application_failed(token: &str, db: &DatabaseConnection) -> Result<(), ProxyError> {
+    application::Entity::update_many()
+        .col_expr(
+            application::Column::Address,
+            Expr::value::<Option<String>>(None),
+        )
+        .col_expr(application::Column::State, Expr::value(State::FAILED))
+        .filter(application::Column::Token.eq(token))
+        .exec(db)
+        .await?;
+
+    Ok(())
+}
+
+async fn resolve_upstream_connection(
+    rx: &mpsc::UnboundedReceiver<UpstreamMessage>,
+    token: &str,
+    db: &DatabaseConnection,
+) -> Result<(hyper::client::conn::http2::SendRequest<Incoming>, String), ProxyError> {
+    let address = resolve_upstream_address(rx, token, db).await?;
+    let mut last_error = None;
+
+    for attempt in 0..=MAX_UPSTREAM_CONNECT_RETRIES {
+        match connect_upstream(&address).await {
+            Ok(sender) => return Ok((sender, address.clone())),
+            Err(error @ ProxyError::UpstreamConnect(_))
+            | Err(error @ ProxyError::UpstreamHandshake(_)) => {
+                warn!(
+                    "Failed to connect to upstream {address} for token after attempt {}: {error}",
+                    attempt + 1
+                );
+                last_error = Some(error);
+            }
+            Err(error) => return Err(error),
+        }
+
+        if attempt < MAX_UPSTREAM_CONNECT_RETRIES {
+            tokio::time::sleep(UPSTREAM_CONNECT_RETRY_DELAY).await;
+        }
+    }
+
+    mark_application_failed(token, db).await?;
+    Err(last_error.expect("connection retries should capture the last upstream error"))
 }
 
 async fn upstream_connection(
@@ -322,10 +380,17 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 mod test {
     use http::header::{AUTHORIZATION, CONTENT_TYPE};
     use http::{HeaderMap, StatusCode};
+    use sea_orm::{ActiveModelTrait, ActiveValue, EntityTrait};
+    use uuid::Uuid;
 
-    use super::{extract_bearer_token, percent_encode_grpc_message, proxy_error_response};
-    use crate::entities::application::State;
+    use super::{
+        extract_bearer_token, percent_encode_grpc_message, proxy_error_response,
+        resolve_upstream_connection,
+    };
+    use crate::config::ProxyConfig;
+    use crate::entities::application::{self, State};
     use crate::error::Error as ProxyError;
+    use crate::test_utils::{create_test_router_with_config, default_user_auth};
 
     #[test]
     fn test_extract_bearer_token() {
@@ -386,5 +451,39 @@ mod test {
             percent_encode_grpc_message("upstream failed: bad\nstate % value"),
             "upstream failed: bad%0Astate %25 value"
         );
+    }
+
+    #[tokio::test]
+    async fn test_resolve_upstream_connection_marks_application_failed_after_retries() {
+        let (_router, db) =
+            create_test_router_with_config(ProxyConfig::default(), default_user_auth()).await;
+        let token = Uuid::new_v4().to_string();
+
+        let app = application::ActiveModel {
+            username: ActiveValue::Set("test-user".to_string()),
+            state: ActiveValue::Set(State::RUNNING),
+            token: ActiveValue::Set(token.clone()),
+            address: ActiveValue::Set(Some("127.0.0.1:9".to_string())),
+            application_id: ActiveValue::Set(None),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let error = resolve_upstream_connection(&rx, &token, &db)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ProxyError::UpstreamConnect(_)));
+
+        let app = application::Entity::find_by_id(app.id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(app.state, State::FAILED);
+        assert_eq!(app.address, None);
     }
 }
