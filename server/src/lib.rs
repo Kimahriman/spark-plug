@@ -73,6 +73,14 @@ pub struct Server {
     tls_acceptor: Option<TlsAcceptor>,
 }
 
+const HEALTH_CHECK_RETRIES: usize = 3;
+
+#[cfg(test)]
+const HEALTH_CHECK_RETRY_DELAY: Duration = Duration::from_millis(10);
+
+#[cfg(not(test))]
+const HEALTH_CHECK_RETRY_DELAY: Duration = Duration::from_secs(1);
+
 impl Server {
     pub async fn from_config(config: ProxyConfig) -> Result<Self, anyhow::Error> {
         let store_url = config
@@ -194,43 +202,33 @@ impl Server {
             .all(&self.db)
             .await?;
 
-        let mut finished_count = 0usize;
+        let mut failed_count = 0usize;
         for app in running_apps {
-            let should_finish = match app.address.as_deref() {
-                Some(address) => {
-                    if let Err(e) = send_session_message(address, &app.token, "health").await {
-                        warn!(
-                            "Health check failed for app {} at {}: {e:?}. Marking as finished.",
-                            app.id, address
-                        );
-                        true
-                    } else {
-                        false
-                    }
-                }
+            let should_fail = match app.address.as_deref() {
+                Some(address) => check_application_health(address, &app.token).await.is_err(),
                 None => {
                     warn!(
-                        "App {} is RUNNING but has no address. Marking as finished.",
+                        "App {} is RUNNING but has no address. Marking as failed.",
                         app.id
                     );
                     true
                 }
             };
 
-            if should_finish {
+            if should_fail {
                 application::ActiveModel {
                     id: ActiveValue::Set(app.id),
-                    state: ActiveValue::Set(State::FINISHED),
+                    state: ActiveValue::Set(State::FAILED),
                     address: ActiveValue::Set(None),
                     ..Default::default()
                 }
                 .update(&self.db)
                 .await?;
-                finished_count += 1;
+                failed_count += 1;
             }
         }
 
-        info!("Health check complete. Marked {finished_count} applications as finished.");
+        info!("Health check complete. Marked {failed_count} applications as failed.");
         Ok(())
     }
 
@@ -301,6 +299,30 @@ impl Server {
             _ = terminate => {},
         }
     }
+}
+
+async fn check_application_health(address: &str, token: &str) -> anyhow::Result<()> {
+    let mut last_error = None;
+
+    for attempt in 0..=HEALTH_CHECK_RETRIES {
+        match send_session_message(address, token, "health").await {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                warn!(
+                    "Health check attempt {} failed for app at {}: {error:?}",
+                    attempt + 1,
+                    address
+                );
+                last_error = Some(error);
+            }
+        }
+
+        if attempt < HEALTH_CHECK_RETRIES {
+            tokio::time::sleep(HEALTH_CHECK_RETRY_DELAY).await;
+        }
+    }
+
+    Err(last_error.expect("health check retries should capture the last error"))
 }
 
 fn load_tls_acceptor(config: &ProxyConfig) -> Result<Option<TlsAcceptor>, io::Error> {
@@ -540,7 +562,7 @@ mod test {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(no_address_after.state, State::FINISHED);
+        assert_eq!(no_address_after.state, State::FAILED);
         assert_eq!(no_address_after.address, None);
 
         let unreachable_after = application::Entity::find_by_id(unreachable_running.id)
@@ -548,7 +570,7 @@ mod test {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(unreachable_after.state, State::FINISHED);
+        assert_eq!(unreachable_after.state, State::FAILED);
         assert_eq!(unreachable_after.address, None);
 
         let launching_after = application::Entity::find_by_id(launching.id)
