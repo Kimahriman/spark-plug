@@ -82,7 +82,9 @@ impl ProxyService {
         match dispatch.as_mut().unwrap().send((req, tx)) {
             Ok(_) => rx,
             Err(mpsc::error::SendError((_, tx))) => {
-                let _ = tx.send(Err(ProxyError::InternalError("Upstream unexpectedly closed".to_string())));
+                let _ = tx.send(Err(ProxyError::InternalError(
+                    "Upstream unexpectedly closed".to_string(),
+                )));
                 rx
             }
         }
@@ -96,7 +98,12 @@ impl Service<Request<Incoming>> for ProxyService {
         Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
 
     fn call(&self, req: Request<Incoming>) -> Self::Future {
-        debug!("Handling call on service {} for {} {}", self.id, req.method(), req.uri());
+        debug!(
+            "Handling call on service {} for {} {}",
+            self.id,
+            req.method(),
+            req.uri()
+        );
         if req
             .uri()
             .path()
@@ -173,7 +180,7 @@ fn proxy_error_response(error: ProxyError) -> Response<axum::body::Body> {
         ProxyError::InvalidUpstreamUri(_) => "13",
         ProxyError::UpstreamRequest(_) => "14",
         ProxyError::Authorization(_) => "16",
-        ProxyError::InternalError(_) => "13"
+        ProxyError::InternalError(_) => "13",
     };
     let grpc_message = percent_encode_grpc_message(&error.to_string());
 
@@ -357,7 +364,11 @@ async fn upstream_connection(
         };
         *req.uri_mut() = uri;
 
-        debug!("Proxying request for token {}: {:?}", token_prefix(token.as_ref()), req.uri().path_and_query());
+        debug!(
+            "Proxying request for token {}: {:?}",
+            token_prefix(token.as_ref()),
+            req.uri().path_and_query()
+        );
 
         let response = sender
             .send_request(req)
@@ -365,7 +376,10 @@ async fn upstream_connection(
             .map(|response| response.map(axum::body::Body::new))
             .map_err(ProxyError::UpstreamRequest);
 
-        debug!("Proxying response for token {}: {response:?}", token_prefix(token.as_ref()));
+        debug!(
+            "Proxying response for token {}: {response:?}",
+            token_prefix(token.as_ref())
+        );
 
         if response.is_err() {
             upstream = None;
