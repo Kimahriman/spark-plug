@@ -96,7 +96,7 @@ impl Service<Request<Incoming>> for ProxyService {
         Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
 
     fn call(&self, req: Request<Incoming>) -> Self::Future {
-        debug!("Handling call for {} {}", req.method(), req.uri());
+        debug!("Handling call on service {} for {} {}", self.id, req.method(), req.uri());
         if req
             .uri()
             .path()
@@ -221,6 +221,10 @@ fn extract_bearer_token(headers: &HeaderMap) -> Result<String, ProxyError> {
             "expected `Bearer <token>`".to_string(),
         )),
     }
+}
+
+fn token_prefix(token: &str) -> &str {
+    &token[..8]
 }
 
 async fn resolve_upstream_address(
@@ -353,7 +357,7 @@ async fn upstream_connection(
         };
         *req.uri_mut() = uri;
 
-        debug!("Proxying request {:?}", req.uri().path_and_query());
+        debug!("Proxying request for token {}: {:?}", token_prefix(token.as_ref()), req.uri().path_and_query());
 
         let response = sender
             .send_request(req)
@@ -361,7 +365,7 @@ async fn upstream_connection(
             .map(|response| response.map(axum::body::Body::new))
             .map_err(ProxyError::UpstreamRequest);
 
-        debug!("Proxying response {response:?}");
+        debug!("Proxying response for token {}: {response:?}", token_prefix(token.as_ref()));
 
         if response.is_err() {
             upstream = None;
