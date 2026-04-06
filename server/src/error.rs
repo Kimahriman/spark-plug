@@ -28,4 +28,6 @@ pub enum Error {
     InvalidUpstreamUri(#[source] http::uri::InvalidUri),
     #[error("upstream request failed: {0}")]
     UpstreamRequest(#[source] hyper::Error),
+    #[error("internal error: {0}")]
+    InternalError(String),
 }
