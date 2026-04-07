@@ -29,5 +29,5 @@ pub enum Error {
     #[error("upstream request failed: {0}")]
     UpstreamRequest(#[source] hyper::Error),
     #[error("internal error: {0}")]
-    InternalError(String),
+    Internal(String),
 }

@@ -82,7 +82,7 @@ impl ProxyService {
         match dispatch.as_mut().unwrap().send((req, tx)) {
             Ok(_) => rx,
             Err(mpsc::error::SendError((_, tx))) => {
-                let _ = tx.send(Err(ProxyError::InternalError(
+                let _ = tx.send(Err(ProxyError::Internal(
                     "Upstream unexpectedly closed".to_string(),
                 )));
                 rx
@@ -180,7 +180,7 @@ fn proxy_error_response(error: ProxyError) -> Response<axum::body::Body> {
         ProxyError::InvalidUpstreamUri(_) => "13",
         ProxyError::UpstreamRequest(_) => "14",
         ProxyError::Authorization(_) => "16",
-        ProxyError::InternalError(_) => "13",
+        ProxyError::Internal(_) => "13",
     };
     let grpc_message = percent_encode_grpc_message(&error.to_string());
 
