@@ -341,10 +341,14 @@ async fn upstream_connection(
         match extract_bearer_token(req.headers()) {
             Ok(t) if t == token => (),
             Ok(t) => {
-                warn!("Token mismatch on upstream request. Connection is using {}, request contained {}", token_prefix(token.as_ref()), token_prefix(t.as_ref()));
+                warn!(
+                    "Token mismatch on upstream request. Connection is using {}, request contained {}",
+                    token_prefix(token.as_ref()),
+                    token_prefix(t.as_ref())
+                );
                 let _ = tx.send(Err(ProxyError::InvalidAuthorizationToken));
                 continue;
-            },
+            }
             Err(error) => {
                 warn!("Failed to parse token for request: {error}");
                 let _ = tx.send(Err(error));
