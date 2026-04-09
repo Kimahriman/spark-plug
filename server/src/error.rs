@@ -12,6 +12,8 @@ pub enum Error {
     InvalidAuthorizationHeader(String),
     #[error("unsupported authorization scheme")]
     InvalidAuthorizationScheme,
+    #[error("invalid authorization token")]
+    InvalidAuthorizationToken,
     #[error("application not found for provided token")]
     ApplicationNotFound,
     #[error("application has no upstream address")]

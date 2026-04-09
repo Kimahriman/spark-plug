@@ -170,6 +170,7 @@ fn proxy_error_response(error: ProxyError) -> Response<axum::body::Body> {
         ProxyError::MissingAuthorizationHeader => "16",
         ProxyError::InvalidAuthorizationHeader(_) => "16",
         ProxyError::InvalidAuthorizationScheme => "16",
+        ProxyError::InvalidAuthorizationToken => "16",
         ProxyError::ApplicationNotFound => "5",
         ProxyError::MissingApplicationAddress => "14",
         ProxyError::InvalidApplicationState(State::LAUNCHING) => "14",
@@ -336,6 +337,21 @@ async fn upstream_connection(
     let mut upstream = None;
 
     while let Some((mut req, tx)) = rx.recv().await {
+        // Verify the token on the request matches that for the session
+        match extract_bearer_token(req.headers()) {
+            Ok(t) if t == token => (),
+            Ok(t) => {
+                warn!("Token mismatch on upstream request. Connection is using {}, request contained {}", token_prefix(token.as_ref()), token_prefix(t.as_ref()));
+                let _ = tx.send(Err(ProxyError::InvalidAuthorizationToken));
+                continue;
+            },
+            Err(error) => {
+                warn!("Failed to parse token for request: {error}");
+                let _ = tx.send(Err(error));
+                continue;
+            }
+        };
+
         if upstream.is_none() {
             match resolve_upstream_connection(&rx, &token, &db).await {
                 Ok(connection) => upstream = Some(connection),
