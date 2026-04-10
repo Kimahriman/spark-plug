@@ -360,7 +360,10 @@ async fn upstream_connection(
             match resolve_upstream_connection(&rx, &token, &db).await {
                 Ok(connection) => upstream = Some(connection),
                 Err(error) => {
-                    warn!("Failed to initialize upstream connection for proxy request: {error}");
+                    warn!(
+                        "Failed to initialize upstream connection for token {}: {error}",
+                        token_prefix(token.as_ref())
+                    );
                     let _ = tx.send(Err(error));
                     continue;
                 }
