@@ -221,33 +221,30 @@ impl SparkLauncher {
             .tempdir()?;
         let venv_path = venv_dir.path().to_string_lossy().to_string();
 
-        // Create the virtual environment
-        let status = Command::new(python)
-            .args(["-m", "venv", &venv_path])
+        // Create the virtual environment with uv using the configured Python.
+        let status = Command::new("uv")
+            .args(["venv", "--python", python, &venv_path])
             .status()
             .await?;
 
         if !status.success() {
             return Err(io::Error::other(format!(
-                "Failed to create virtual environment with {python}"
+                "Failed to create virtual environment with uv using {python}"
             )));
         }
 
-        // Install the packages
-        let pip_executable = if cfg!(target_os = "windows") {
-            format!("{venv_path}/Scripts/pip")
+        // Install the packages with uv, targeting the newly created environment.
+        let venv_python = if cfg!(target_os = "windows") {
+            format!("{venv_path}/Scripts/python.exe")
         } else {
-            format!("{venv_path}/bin/pip")
+            format!("{venv_path}/bin/python")
         };
 
-        let mut install_args = vec!["install"];
+        let mut install_args = vec!["pip", "install", "--python", &venv_python];
         install_args.push("venv-pack");
         install_args.extend(packages.iter().map(String::as_str));
 
-        let status = Command::new(pip_executable)
-            .args(install_args)
-            .status()
-            .await?;
+        let status = Command::new("uv").args(install_args).status().await?;
 
         if !status.success() {
             return Err(io::Error::other(
