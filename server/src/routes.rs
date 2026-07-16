@@ -22,6 +22,7 @@ use crate::{
     config::ProxyConfig,
     entities::application,
     launcher::Launcher,
+    proxy::UpstreamConnectionCache,
     send_session_message,
 };
 
@@ -30,6 +31,7 @@ pub(crate) async fn get_router<L>(
     launcher: L,
     db: DatabaseConnection,
     config: ProxyConfig,
+    upstreams: UpstreamConnectionCache,
 ) -> Router
 where
     L: Launcher + 'static,
@@ -38,6 +40,7 @@ where
         db,
         launcher: Arc::new(launcher),
         config: Arc::new(config),
+        upstreams,
     };
 
     let user_api = Router::new()
@@ -60,6 +63,7 @@ struct AppStateDyn<L: Launcher + 'static> {
     db: DatabaseConnection,
     launcher: Arc<L>,
     config: Arc<ProxyConfig>,
+    upstreams: UpstreamConnectionCache,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -294,14 +298,19 @@ async fn delete_app<L: Launcher>(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    if let Some(address) = address {
+    let stop_result = if let Some(address) = address {
         send_session_message(&address, &token, "stop")
             .await
             .map_err(|e| {
                 error!("Failed to stop session: {e:?}");
                 StatusCode::INTERNAL_SERVER_ERROR
-            })?;
-    }
+            })
+    } else {
+        Ok(())
+    };
+
+    state.upstreams.invalidate(&token);
+    stop_result?;
 
     Ok(())
 }
@@ -351,6 +360,7 @@ async fn app_callback_delete<L: Launcher>(
     State(state): State<AppStateDyn<L>>,
     Extension(token): Extension<BearerToken>,
 ) -> Result<(), StatusCode> {
+    let token = token.0;
     let res = application::Entity::update_many()
         .col_expr(
             application::Column::Address,
@@ -360,7 +370,7 @@ async fn app_callback_delete<L: Launcher>(
             application::Column::State,
             Expr::value(application::State::FINISHED),
         )
-        .filter(application::Column::Token.eq(token.0))
+        .filter(application::Column::Token.eq(&token))
         .exec(&state.db)
         .await
         .map_err(|e| {
@@ -371,6 +381,7 @@ async fn app_callback_delete<L: Launcher>(
     if res.rows_affected == 0 {
         Err(StatusCode::NOT_FOUND)
     } else {
+        state.upstreams.invalidate(&token);
         Ok(())
     }
 }

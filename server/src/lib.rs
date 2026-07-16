@@ -30,7 +30,7 @@ use migration::Migrator;
 use crate::auth::UserAuth;
 use crate::entities::application::{self, State};
 use crate::launcher::SparkLauncher;
-use crate::proxy::{ProxyService, send_session_message};
+use crate::proxy::{ProxyService, UpstreamConnectionCache, send_session_message};
 
 mod auth;
 pub mod config;
@@ -70,6 +70,7 @@ pub struct Server {
     config: ProxyConfig,
     router: Router,
     db: DatabaseConnection,
+    upstreams: UpstreamConnectionCache,
     tls_acceptor: Option<TlsAcceptor>,
 }
 
@@ -91,8 +92,16 @@ impl Server {
         let db = Database::connect(store_url).await?;
         let launcher = SparkLauncher::from_config(&config);
         let user_auth = UserAuth::from_config(&config).await;
+        let upstreams = UpstreamConnectionCache::new(db.clone());
 
-        let router = get_router(user_auth, launcher, db.clone(), config.clone()).await;
+        let router = get_router(
+            user_auth,
+            launcher,
+            db.clone(),
+            config.clone(),
+            upstreams.clone(),
+        )
+        .await;
 
         let tls_acceptor = load_tls_acceptor(&config)?;
 
@@ -100,6 +109,7 @@ impl Server {
             config,
             router,
             db,
+            upstreams,
             tls_acceptor,
         })
     }
@@ -137,7 +147,6 @@ impl Server {
         });
 
         let (close_tx, close_rx) = watch::channel(());
-
         loop {
             let (stream, _) = tokio::select! {
                 s = listener.accept() => s.unwrap(),
@@ -148,9 +157,14 @@ impl Server {
             };
 
             if let Some(acceptor) = self.tls_acceptor.as_ref() {
-                self.serve_connection(acceptor.accept(stream).await?, &signal_tx, &close_rx);
+                self.serve_connection(
+                    acceptor.accept(stream).await?,
+                    &signal_tx,
+                    &close_rx,
+                    self.upstreams.clone(),
+                );
             } else {
-                self.serve_connection(stream, &signal_tx, &close_rx);
+                self.serve_connection(stream, &signal_tx, &close_rx, self.upstreams.clone());
             };
         }
 
@@ -242,18 +256,19 @@ impl Server {
         io: I,
         signal_tx: &watch::Sender<()>,
         close_rx: &watch::Receiver<()>,
+        upstreams: UpstreamConnectionCache,
     ) where
         I: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     {
         let router = self.router.clone();
-        let db = self.db.clone();
         let signal_tx = signal_tx.clone();
         let close_rx = close_rx.clone();
 
         tokio::task::spawn(async move {
             let builder = Builder::new(TokioExecutor::new());
-            let mut conn =
-                pin!(builder.serve_connection(TokioIo::new(io), ProxyService::new(router, db)));
+            let mut conn = pin!(
+                builder.serve_connection(TokioIo::new(io), ProxyService::new(router, upstreams))
+            );
 
             let mut signal_closed = pin!(signal_tx.closed().fuse());
 
@@ -383,6 +398,7 @@ pub(crate) mod test_utils {
     use crate::{
         auth::{CurrentUserAuth, UserAuth},
         launcher::Launcher,
+        proxy::UpstreamConnectionCache,
         routes::get_router,
     };
 
@@ -423,6 +439,14 @@ pub(crate) mod test_utils {
         config: ProxyConfig,
         user_auth: UserAuth,
     ) -> (Router, DatabaseConnection) {
+        let (router, db, _) = create_test_router_with_config_and_upstreams(config, user_auth).await;
+        (router, db)
+    }
+
+    async fn create_test_router_with_config_and_upstreams(
+        config: ProxyConfig,
+        user_auth: UserAuth,
+    ) -> (Router, DatabaseConnection, UpstreamConnectionCache) {
         let _ = env_logger::Builder::new()
             .filter(Some("spark_connect_proxy"), log::LevelFilter::Debug)
             .is_test(true)
@@ -431,20 +455,30 @@ pub(crate) mod test_utils {
         let db = Database::connect("sqlite::memory:").await.unwrap();
         Migrator::up(&db, None).await.unwrap();
 
-        let router = get_router(user_auth, MockLauncher, db.clone(), config).await;
-        (router, db)
+        let upstreams = UpstreamConnectionCache::new(db.clone());
+        let router = get_router(
+            user_auth,
+            MockLauncher,
+            db.clone(),
+            config,
+            upstreams.clone(),
+        )
+        .await;
+        (router, db, upstreams)
     }
 
     pub(crate) async fn create_test_server_with_config(
         config: ProxyConfig,
         user_auth: UserAuth,
     ) -> Server {
-        let (router, db) = create_test_router_with_config(config.clone(), user_auth).await;
+        let (router, db, upstreams) =
+            create_test_router_with_config_and_upstreams(config.clone(), user_auth).await;
 
         Server {
             config,
             router,
             db,
+            upstreams,
             tls_acceptor: None,
         }
     }

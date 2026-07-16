@@ -1,7 +1,8 @@
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::Router;
@@ -39,54 +40,18 @@ const UPSTREAM_CONNECT_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 pub(crate) struct ProxyService {
     id: u64,
-    dispatch: Mutex<Option<mpsc::UnboundedSender<UpstreamMessage>>>,
+    upstreams: UpstreamConnectionCache,
     router: Router,
-    db: DatabaseConnection,
 }
 
 impl ProxyService {
-    pub(crate) fn new(router: Router, db: DatabaseConnection) -> Self {
+    pub(crate) fn new(router: Router, upstreams: UpstreamConnectionCache) -> Self {
         let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
         debug!("Creating proxy service {id}");
         Self {
             id,
-            dispatch: Mutex::new(None),
+            upstreams,
             router,
-            db,
-        }
-    }
-
-    fn dispatch(
-        &self,
-        req: Request<Incoming>,
-    ) -> oneshot::Receiver<Result<Response<axum::body::Body>, ProxyError>> {
-        let mut dispatch = self.dispatch.lock().unwrap();
-        let (tx, rx) = oneshot::channel();
-        if dispatch.is_none() {
-            let token = match extract_bearer_token(req.headers()) {
-                Ok(token) => token,
-                Err(error) => {
-                    let _ = tx.send(Err(error));
-                    return rx;
-                }
-            };
-
-            let (upstream_sender, upstream_receiver) = mpsc::unbounded_channel();
-            let db = self.db.clone();
-            tokio::task::spawn(
-                async move { upstream_connection(upstream_receiver, token, db).await },
-            );
-            *dispatch = Some(upstream_sender);
-        }
-
-        match dispatch.as_mut().unwrap().send((req, tx)) {
-            Ok(_) => rx,
-            Err(mpsc::error::SendError((_, tx))) => {
-                let _ = tx.send(Err(ProxyError::Internal(
-                    "Upstream unexpectedly closed".to_string(),
-                )));
-                rx
-            }
         }
     }
 }
@@ -109,15 +74,14 @@ impl Service<Request<Incoming>> for ProxyService {
             .path()
             .starts_with("/spark.connect.SparkConnectService")
         {
-            let rx = self.dispatch(req);
+            let upstreams = self.upstreams.clone();
             Box::pin(async move {
-                match rx.await {
-                    Ok(Ok(res)) => Ok(res),
-                    Ok(Err(error)) => {
+                match dispatch_request(req, upstreams).await {
+                    Ok(res) => Ok(res),
+                    Err(error) => {
                         warn!("Proxy request failed: {error}");
                         Ok(proxy_error_response(error))
                     }
-                    Err(_) => Ok(proxy_error_response(ProxyError::ApplicationNotFound)),
                 }
             })
         } else {
@@ -129,12 +93,105 @@ impl Service<Request<Incoming>> for ProxyService {
 
 impl Drop for ProxyService {
     fn drop(&mut self) {
-        debug!(
-            "Dropping proxy service {}: {}",
-            self.id,
-            self.dispatch.lock().unwrap().is_some()
-        );
+        debug!("Dropping proxy service {}", self.id);
     }
+}
+
+/// Server-wide cache of token-specific Spark Connect dispatchers.
+///
+/// Each dispatcher lazily opens one HTTP/2 connection to its application's
+/// upstream and reuses it across requests from any downstream connection.
+#[derive(Clone)]
+pub(crate) struct UpstreamConnectionCache {
+    connections: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<UpstreamMessage>>>>,
+    db: DatabaseConnection,
+}
+
+impl UpstreamConnectionCache {
+    pub(crate) fn new(db: DatabaseConnection) -> Self {
+        Self {
+            connections: Arc::new(Mutex::new(HashMap::new())),
+            db,
+        }
+    }
+
+    async fn sender_for(
+        &self,
+        token: &str,
+    ) -> Result<mpsc::UnboundedSender<UpstreamMessage>, ProxyError> {
+        {
+            let connections = self.connections.lock().unwrap();
+            if let Some(sender) = connections.get(token)
+                && !sender.is_closed()
+            {
+                return Ok(sender.clone());
+            }
+        }
+
+        // Only cache tokens that identify an application. Besides avoiding a
+        // database lookup on subsequent requests, this prevents arbitrary
+        // bearer tokens from growing the process-wide cache.
+        let exists = application::Entity::find()
+            .filter(application::Column::Token.eq(token))
+            .one(&self.db)
+            .await?
+            .is_some();
+        if !exists {
+            return Err(ProxyError::ApplicationNotFound);
+        }
+
+        let mut connections = self.connections.lock().unwrap();
+        if let Some(sender) = connections.get(token)
+            && !sender.is_closed()
+        {
+            return Ok(sender.clone());
+        }
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let db = self.db.clone();
+        let token = token.to_string();
+        connections.insert(token.clone(), sender.clone());
+        tokio::task::spawn(async move { upstream_connection(receiver, token, db).await });
+        Ok(sender)
+    }
+
+    fn remove_closed(&self, token: &str) {
+        let mut connections = self.connections.lock().unwrap();
+        if connections
+            .get(token)
+            .is_some_and(|sender| sender.is_closed())
+        {
+            connections.remove(token);
+        }
+    }
+
+    pub(crate) fn invalidate(&self, token: &str) {
+        if self.connections.lock().unwrap().remove(token).is_some() {
+            debug!(
+                "Invalidated upstream connection for token {}",
+                token_prefix(token)
+            );
+        }
+    }
+}
+
+async fn dispatch_request(
+    req: Request<Incoming>,
+    upstreams: UpstreamConnectionCache,
+) -> Result<Response<axum::body::Body>, ProxyError> {
+    let token = extract_bearer_token(req.headers())?;
+    let sender = upstreams.sender_for(&token).await?;
+    let (tx, rx) = oneshot::channel();
+
+    if let Err(mpsc::error::SendError((_, _))) = sender.send((req, tx)) {
+        upstreams.remove_closed(&token);
+        return Err(ProxyError::Internal(
+            "Upstream unexpectedly closed".to_string(),
+        ));
+    }
+
+    rx.await.map_err(|_| {
+        ProxyError::Internal("Upstream response channel unexpectedly closed".to_string())
+    })?
 }
 
 pub(crate) async fn send_session_message(
@@ -232,7 +289,7 @@ fn extract_bearer_token(headers: &HeaderMap) -> Result<String, ProxyError> {
 }
 
 fn token_prefix(token: &str) -> &str {
-    &token[..8]
+    token.get(..8).unwrap_or(token)
 }
 
 async fn resolve_upstream_address(
@@ -393,24 +450,26 @@ async fn upstream_connection(
             req.uri().path_and_query()
         );
 
-        let response = sender
-            .send_request(req)
-            .await
-            .map(|response| response.map(axum::body::Body::new))
-            .map_err(ProxyError::UpstreamRequest);
-
-        debug!(
-            "Proxying response for token {}: {response:?}",
-            token_prefix(token.as_ref())
-        );
-
-        if response.is_err() {
+        if let Err(error) = sender.ready().await {
             upstream = None;
+            let _ = tx.send(Err(ProxyError::UpstreamRequest(error)));
+            continue;
         }
 
-        if tx.send(response).is_err() {
-            debug!("Request receiver dropped before upstream response was delivered");
-        }
+        let response = sender.send_request(req);
+        let token_prefix = token_prefix(&token).to_string();
+        tokio::task::spawn(async move {
+            let response = response
+                .await
+                .map(|response| response.map(axum::body::Body::new))
+                .map_err(ProxyError::UpstreamRequest);
+
+            debug!("Proxying response for token {token_prefix}: {response:?}");
+
+            if tx.send(response).is_err() {
+                debug!("Request receiver dropped before upstream response was delivered");
+            }
+        });
     }
 
     debug!("rx closed for upstream");
@@ -420,14 +479,23 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(test)]
 mod test {
+    use std::convert::Infallible;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use axum::body::Body;
     use http::header::{AUTHORIZATION, CONTENT_TYPE};
-    use http::{HeaderMap, StatusCode};
+    use http::{HeaderMap, Request, Response, StatusCode};
+    use hyper::body::Incoming;
+    use hyper::service::service_fn;
+    use hyper_util::rt::{TokioExecutor, TokioIo};
     use sea_orm::{ActiveModelTrait, ActiveValue, EntityTrait};
+    use tokio::sync::Barrier;
     use uuid::Uuid;
 
     use super::{
-        extract_bearer_token, percent_encode_grpc_message, proxy_error_response,
-        resolve_upstream_connection,
+        ProxyService, UpstreamConnectionCache, extract_bearer_token, percent_encode_grpc_message,
+        proxy_error_response, resolve_upstream_connection,
     };
     use crate::config::ProxyConfig;
     use crate::entities::application::{self, State};
@@ -493,6 +561,144 @@ mod test {
             percent_encode_grpc_message("upstream failed: bad\nstate % value"),
             "upstream failed: bad%0Astate %25 value"
         );
+    }
+
+    #[tokio::test]
+    async fn test_upstream_connections_are_cached_by_token() {
+        let (_router, db) =
+            create_test_router_with_config(ProxyConfig::default(), default_user_auth()).await;
+        let cache = UpstreamConnectionCache::new(db);
+
+        for token in ["first-token", "second-token"] {
+            application::ActiveModel {
+                username: ActiveValue::Set("test-user".to_string()),
+                state: ActiveValue::Set(State::LAUNCHING),
+                token: ActiveValue::Set(token.to_string()),
+                ..Default::default()
+            }
+            .insert(&cache.db)
+            .await
+            .unwrap();
+        }
+
+        let first = cache.sender_for("first-token").await.unwrap();
+        let first_again = cache.sender_for("first-token").await.unwrap();
+        let second = cache.sender_for("second-token").await.unwrap();
+
+        assert!(first.same_channel(&first_again));
+        assert!(!first.same_channel(&second));
+    }
+
+    #[tokio::test]
+    async fn test_unknown_tokens_are_not_cached() {
+        let (_router, db) =
+            create_test_router_with_config(ProxyConfig::default(), default_user_auth()).await;
+        let cache = UpstreamConnectionCache::new(db);
+
+        let result = cache.sender_for("unknown-token").await;
+
+        assert!(matches!(result, Err(ProxyError::ApplicationNotFound)));
+        assert!(cache.connections.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_upstream_connection_can_be_invalidated() {
+        let (_router, db) =
+            create_test_router_with_config(ProxyConfig::default(), default_user_auth()).await;
+        let cache = UpstreamConnectionCache::new(db);
+        let token = "test-token";
+        application::ActiveModel {
+            username: ActiveValue::Set("test-user".to_string()),
+            state: ActiveValue::Set(State::LAUNCHING),
+            token: ActiveValue::Set(token.to_string()),
+            ..Default::default()
+        }
+        .insert(&cache.db)
+        .await
+        .unwrap();
+        let sender = cache.sender_for(token).await.unwrap();
+        let weak_sender = sender.downgrade();
+
+        cache.invalidate(token);
+        drop(sender);
+        tokio::task::yield_now().await;
+
+        assert!(!cache.connections.lock().unwrap().contains_key(token));
+        assert!(weak_sender.upgrade().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_multiple_upstream_requests_can_be_in_flight() {
+        let (router, db) =
+            create_test_router_with_config(ProxyConfig::default(), default_user_auth()).await;
+        let token = Uuid::new_v4().to_string();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+
+        application::ActiveModel {
+            username: ActiveValue::Set("test-user".to_string()),
+            state: ActiveValue::Set(State::RUNNING),
+            token: ActiveValue::Set(token.clone()),
+            address: ActiveValue::Set(Some(address.to_string())),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let barrier = Arc::new(Barrier::new(2));
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            hyper::server::conn::http2::Builder::new(TokioExecutor::new())
+                .serve_connection(
+                    TokioIo::new(stream),
+                    service_fn(move |_request: Request<Incoming>| {
+                        let barrier = barrier.clone();
+                        async move {
+                            barrier.wait().await;
+                            Ok::<_, Infallible>(Response::new(Body::empty()))
+                        }
+                    }),
+                )
+                .await
+                .unwrap();
+        });
+
+        let (client_io, proxy_io) = tokio::io::duplex(64 * 1024);
+        let cache = UpstreamConnectionCache::new(db);
+        tokio::spawn(async move {
+            hyper::server::conn::http2::Builder::new(TokioExecutor::new())
+                .serve_connection(TokioIo::new(proxy_io), ProxyService::new(router, cache))
+                .await
+                .unwrap();
+        });
+
+        let (mut sender, connection) =
+            hyper::client::conn::http2::handshake(TokioExecutor::new(), TokioIo::new(client_io))
+                .await
+                .unwrap();
+        tokio::spawn(connection);
+
+        let request = || {
+            Request::builder()
+                .uri("/spark.connect.SparkConnectService/ExecutePlan")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap()
+        };
+        sender.ready().await.unwrap();
+        let first = sender.send_request(request());
+        sender.ready().await.unwrap();
+        let second = sender.send_request(request());
+
+        let (first, second) = tokio::time::timeout(Duration::from_secs(1), async {
+            tokio::join!(first, second)
+        })
+        .await
+        .expect("requests were serialized instead of being concurrently in flight");
+
+        assert!(first.is_ok());
+        assert!(second.is_ok());
     }
 
     #[tokio::test]
