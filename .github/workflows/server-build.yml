@@ -43,7 +43,7 @@ jobs:
           hadoop-version: '3'
 
       - name: Install protobuf compiler
-        run: apt-get update && apt-get install -y protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Format
         run: cargo fmt -- --check
@@ -89,7 +89,7 @@ jobs:
         run: sbt package
 
       - name: Install protobuf compiler
-        run: apt-get update && apt-get install -y protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Build the Rust server (release + embed-plugin)
         run: cargo build --release -p spark-connect-proxy --features embed-plugin
