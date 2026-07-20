@@ -54,6 +54,9 @@ jobs:
       - name: Build the plugin
         run: sbt package
 
+      - name: Install protobuf compiler
+        run: apt-get update && apt-get install -y protobuf-compiler
+
       - name: Run tests
         run: cargo test
 
@@ -67,7 +70,7 @@ jobs:
       RUST_BACKTRACE: "1"
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -83,6 +86,9 @@ jobs:
 
       - name: Build the SBT plugin
         run: sbt package
+
+      - name: Install protobuf compiler
+        run: apt-get update && apt-get install -y protobuf-compiler
 
       - name: Build the Rust server (release + embed-plugin)
         run: cargo build --release -p spark-connect-proxy --features embed-plugin
