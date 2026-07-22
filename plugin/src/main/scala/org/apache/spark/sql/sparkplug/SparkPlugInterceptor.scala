@@ -1,16 +1,16 @@
-package org.apache.spark.sql.connect.proxy
+package org.apache.spark.sql.sparkplug
 
 import org.apache.spark.SparkContext
 import org.sparkproject.connect.grpc.ServerInterceptor
 import org.sparkproject.connect.grpc.{Metadata, ServerCall, ServerCallHandler}
 import org.sparkproject.connect.grpc.ServerCall.Listener
 import org.sparkproject.connect.grpc.Status
-import org.apache.spark.sql.connect.proxy.Config.SPARK_CONNECT_PROXY_IDLE_TIMEOUT
+import org.apache.spark.sql.sparkplug.Config.SPARK_PLUG_IDLE_TIMEOUT
 import org.apache.spark.sql.connect.service.SparkConnectService
 
-class SparkConnectProxyInterceptor extends ServerInterceptor {
+class SparkPlugInterceptor extends ServerInterceptor {
 
-  val proxyMessageHeader = Metadata.Key.of("X-Connect-Proxy", Metadata.ASCII_STRING_MARSHALLER)
+  val proxyMessageHeader = Metadata.Key.of("X-Spark-Plug", Metadata.ASCII_STRING_MARSHALLER)
 
   override def interceptCall[ReqT, RespT](
       call: ServerCall[ReqT,RespT],

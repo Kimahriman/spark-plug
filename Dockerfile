@@ -34,17 +34,17 @@ RUN apt-get update && \
 
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk
 
-WORKDIR /opt/spark-connect-proxy
+WORKDIR /opt/spark-plug
 
 ARG VERSION=0.1.0
-ARG PLUGIN_JAR=spark-connect-proxy_2.13-${VERSION}.jar
+ARG PLUGIN_JAR=spark-plug_2.13-${VERSION}.jar
 
-COPY --from=rust-builder /usr/local/cargo/bin/spark-connect-proxy /opt/spark-connect-proxy/
-COPY --from=java-builder /usr/src/app/plugin/target/scala-2.13/${PLUGIN_JAR} /opt/spark-connect-proxy/spark-connect-proxy_2.13.jar
+COPY --from=rust-builder /usr/local/cargo/bin/spark-plug /opt/spark-plug/
+COPY --from=java-builder /usr/src/app/plugin/target/scala-2.13/${PLUGIN_JAR} /opt/spark-plug/spark-plug_2.13.jar
 
-ENV CONNECT_PROXY_PLUGIN_PATH=/opt/spark-connect-proxy/spark-connect-proxy_2.13.jar
+ENV SPARK_PLUG_PLUGIN_PATH=/opt/spark-plug/spark-plug_2.13.jar
 
-CMD ["/opt/spark-connect-proxy/spark-connect-proxy"]
+CMD ["/opt/spark-plug/spark-plug"]
 
 FROM ubuntu:noble AS spark-cache
 

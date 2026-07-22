@@ -1,4 +1,4 @@
-package org.apache.spark.sql.connect.proxy
+package org.apache.spark.sql.sparkplug
 
 import java.net.http.{HttpClient, HttpRequest}
 import java.net.http.HttpResponse.BodyHandlers
@@ -14,9 +14,9 @@ import org.apache.spark.{SparkConf, SparkContext, SparkException}
 import org.apache.spark.sql.connect.config.Connect
 import org.apache.spark.sql.connect.service.{SparkConnectService, SparkListenerConnectServiceEnd, SparkListenerConnectServiceStarted}
 
-class SparkConnectProxyListener(conf: SparkConf) extends SparkListener with Logging {
+class SparkPlugListener(conf: SparkConf) extends SparkListener with Logging {
 
-  val callbackAddr = conf.get(Config.SPARK_CONNECT_PROXY_CALLBACK)
+  val callbackAddr = conf.get(Config.SPARK_PLUG_CALLBACK)
 
   val token = conf.get("spark.connect.authenticate.token")
 
@@ -111,7 +111,7 @@ class SparkConnectProxyListener(conf: SparkConf) extends SparkListener with Logg
   }
 
 
-  val timeoutThread = conf.get(Config.SPARK_CONNECT_PROXY_IDLE_TIMEOUT).map { timeout =>
+  val timeoutThread = conf.get(Config.SPARK_PLUG_IDLE_TIMEOUT).map { timeout =>
     val timeoutThread = new Thread(new Runnable() {
       override def run(): Unit = {
         while (true) {

@@ -8,8 +8,8 @@ resolution-markers = [
 
 [manifest]
 members = [
-    "spark-connect-proxy",
-    "spark-connect-proxy-client",
+    "spark-plug",
+    "spark-plug-client",
 ]
 
 [[package]]
@@ -580,7 +580,7 @@ wheels = [
 ]
 
 [[package]]
-name = "spark-connect-proxy"
+name = "spark-plug"
 version = "0.1.0"
 source = { virtual = "." }
 
@@ -601,7 +601,7 @@ dev = [
 ]
 
 [[package]]
-name = "spark-connect-proxy-client"
+name = "spark-plug-client"
 version = "0.1.0"
 source = { virtual = "clients/python" }
 dependencies = [

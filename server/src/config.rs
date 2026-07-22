@@ -73,7 +73,7 @@ impl ProxyConfig {
         }
 
         figment
-            .merge(Env::prefixed("CONNECT_PROXY_"))
+            .merge(Env::prefixed("SPARK_PLUG_"))
             .extract()
             .unwrap()
     }

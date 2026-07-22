@@ -1,10 +1,10 @@
 use clap::Parser;
-use spark_connect_proxy::{Args, ProxyCommand, Server, config::ProxyConfig};
+use spark_plug::{Args, ProxyCommand, Server, config::ProxyConfig};
 
 #[tokio::main]
 pub async fn main() -> Result<(), anyhow::Error> {
     env_logger::Builder::new()
-        .filter(Some("spark_connect_proxy"), log::LevelFilter::Debug)
+        .filter(Some("spark_plug"), log::LevelFilter::Debug)
         .init();
 
     let args = Args::parse();

@@ -40,7 +40,7 @@ mod launcher;
 mod proxy;
 pub mod routes;
 
-/// Start the Spark Connect Proxy server
+/// Start the Spark Plug server
 #[derive(Parser, Debug, Default)]
 #[command(version, about, long_about = None)]
 pub struct Args {
@@ -54,7 +54,7 @@ pub struct Args {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum ProxyCommand {
-    /// Start the Spark Connect Proxy server
+    /// Start the Spark Plug server
     Start,
     /// Delete failed/finished apps older than a threshold in seconds
     Prune {
@@ -448,7 +448,7 @@ pub(crate) mod test_utils {
         user_auth: UserAuth,
     ) -> (Router, DatabaseConnection, UpstreamConnectionCache) {
         let _ = env_logger::Builder::new()
-            .filter(Some("spark_connect_proxy"), log::LevelFilter::Debug)
+            .filter(Some("spark_plug"), log::LevelFilter::Debug)
             .is_test(true)
             .try_init();
 

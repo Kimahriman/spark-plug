@@ -21,19 +21,19 @@ use crate::config::{ProxyConfig, SparkVersion};
 static SPARK_HOME: &str = "SPARK_HOME";
 static APP_NAME_CONFIG: &str = "spark.app.name";
 static TOKEN_CONFIG: &str = "spark.connect.authenticate.token";
-static CALLBACK_CONFIG: &str = "spark.connect.proxy.callback";
-static TIMEOUT_CONFIG: &str = "spark.connect.proxy.idle.timeout";
+static CALLBACK_CONFIG: &str = "spark.plug.callback";
+static TIMEOUT_CONFIG: &str = "spark.plug.idle.timeout";
 static LISTENER_CONFIG: &str = "spark.extraListeners";
 static INTERCEPTOR_CONFIG: &str = "spark.connect.grpc.interceptor.classes";
 static GRPC_PORT_CONFIG: &str = "spark.connect.grpc.binding.port";
 
-static LISTENER_CLASS: &str = "org.apache.spark.sql.connect.proxy.SparkConnectProxyListener";
-static INTERCEPTOR_CLASS: &str = "org.apache.spark.sql.connect.proxy.SparkConnectProxyInterceptor";
-static SERVER_CLASS: &str = "org.apache.spark.sql.connect.proxy.SparkConnectProxyServer";
+static LISTENER_CLASS: &str = "org.apache.spark.sql.sparkplug.SparkPlugListener";
+static INTERCEPTOR_CLASS: &str = "org.apache.spark.sql.sparkplug.SparkPlugInterceptor";
+static SERVER_CLASS: &str = "org.apache.spark.sql.sparkplug.SparkPlugServer";
 
 #[cfg(feature = "embed-plugin")]
 static PLUGIN_BINARY: Option<&[u8]> = Some(include_bytes!(
-    "../../plugin/target/scala-2.13/spark-connect-proxy_2.13-0.1.0.jar"
+    "../../plugin/target/scala-2.13/spark-plug_2.13-0.1.0.jar"
 ));
 #[cfg(not(feature = "embed-plugin"))]
 static PLUGIN_BINARY: Option<&[u8]> = None;
@@ -110,7 +110,7 @@ impl SparkLauncher {
         let (plugin_path, plugin_temp_path) = PLUGIN_BINARY
             .map(|content| {
                 let mut plugin_file = tempfile::Builder::new()
-                    .prefix("spark-connect-proxy-plugin")
+                    .prefix("spark-plug-plugin")
                     .suffix(".jar")
                     .tempfile()
                     .expect("Failed to create temporary file for plugin");
@@ -130,7 +130,7 @@ impl SparkLauncher {
             .unwrap_or_else(|| {
                 (
                     config.plugin_path.clone().unwrap_or(format!(
-                        "{}/../plugin/target/scala-2.13/spark-connect-proxy_2.13-0.1.0.jar",
+                        "{}/../plugin/target/scala-2.13/spark-plug_2.13-0.1.0.jar",
                         env!("CARGO_MANIFEST_DIR")
                     )),
                     None,
@@ -217,7 +217,7 @@ impl SparkLauncher {
         ))?;
 
         let venv_dir = tempfile::Builder::new()
-            .prefix("spark-connect-proxy-venv")
+            .prefix("spark-plug-venv")
             .tempdir()?;
         let venv_path = venv_dir.path().to_string_lossy().to_string();
 
@@ -340,7 +340,7 @@ impl SparkLauncher {
         } else if !configs.contains_key(APP_NAME_CONFIG) {
             configs.insert(
                 APP_NAME_CONFIG.to_string(),
-                format!("connect-proxy-session-{}", session_id),
+                format!("spark-plug-session-{}", session_id),
             );
         }
 
@@ -583,10 +583,7 @@ mod test {
 
         assert_eq!(script[0], "/path/to/plugin");
 
-        assert!(pairs.contains(&[
-            "--conf",
-            &format!("{APP_NAME_CONFIG}=connect-proxy-session-1")
-        ]));
+        assert!(pairs.contains(&["--conf", &format!("{APP_NAME_CONFIG}=spark-plug-session-1")]));
         assert!(pairs.contains(&["--conf", &format!("{TOKEN_CONFIG}=abcd")]));
         assert!(pairs.contains(&[
             "--conf",

@@ -1,5 +1,5 @@
 [package]
-name = "spark-connect-proxy"
+name = "spark-plug"
 version = "0.3.0"
 edition = "2024"
 
@@ -48,7 +48,7 @@ migration = { path = "./migration" }
 [dev-dependencies]
 axum-test = "18.7.0"
 rcgen = "0.14"
-spark-connect-proxy-client = { path = "../clients/rust" }
+spark-plug-client = { path = "../clients/rust" }
 
 [features]
 embed-plugin = []

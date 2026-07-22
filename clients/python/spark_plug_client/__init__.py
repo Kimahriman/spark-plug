@@ -20,7 +20,7 @@ class Application:
         return cls(data["id"], data["token"], data.get("name"))
 
 
-class ConnectProxyClient:
+class SparkPlugClient:
     def __init__(self, url: str, session: Optional[Session]):
         self.url = url
         self.session = session or Session()

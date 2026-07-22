@@ -1,4 +1,4 @@
-# Spark Connect Proxy - Architecture Guide
+# Spark Plug - Architecture Guide
 
 Authenticated HTTP/2 proxy for Apache Spark Connect. Provides session management, authentication, and gRPC proxying for multi-tenant Spark environments.
 
@@ -44,23 +44,23 @@ Authenticated HTTP/2 proxy for Apache Spark Connect. Provides session management
 ### Plugin (`/plugin`) - Scala
 
 **Key Files:**
-- `SparkConnectProxyListener.scala`: SparkListener → POST /callback on startup, DELETE on shutdown
-- `SparkConnectProxyInterceptor.scala`: gRPC interceptor for activity tracking
-- `SparkConnectProxyServer.scala`: Registers plugin with Spark lifecycle
+- `SparkPlugListener.scala`: SparkListener → POST /callback on startup, DELETE on shutdown
+- `SparkPlugInterceptor.scala`: gRPC interceptor for activity tracking
+- `SparkPlugServer.scala`: Registers plugin with Spark lifecycle
 - `Config.scala`: Constants for callback URL, timeout, token
 
 **Injected Spark Config:**
 ```properties
 spark.connect.authenticate.token={token}
-spark.connect.proxy.callback={callback_url}
-spark.connect.proxy.idle.timeout={timeout_seconds}
-spark.extraListeners=org.apache.spark.sql.connect.proxy.SparkConnectProxyListener
-spark.connect.grpc.interceptor.classes=org.apache.spark.sql.connect.proxy.SparkConnectProxyInterceptor
+spark.plug.callback={callback_url}
+spark.plug.idle.timeout={timeout_seconds}
+spark.extraListeners=org.apache.spark.sql.sparkplug.SparkPlugListener
+spark.connect.grpc.interceptor.classes=org.apache.spark.sql.sparkplug.SparkPlugInterceptor
 ```
 
 ### Client (`/clients/python`) - Python
 
-**ConnectProxyClient:**
+**SparkPlugClient:**
 - `create_application(version, config, python_packages)` → POST /apps
 - `list_applications()` → GET /apps
 - `create_session(app)` → SparkSession with TokenInterceptor
@@ -122,7 +122,7 @@ auth_methods:
   - name: jwks
     options:
       oidc_url: https://oidc.example.com/.well-known/openid-configuration
-      audience: connect-proxy
+      audience: spark-plug
 
 spark_versions:
   - name: "4.0.0"
@@ -139,11 +139,11 @@ spark_versions:
 
 kerberos_config:
   keytab: /etc/proxy/proxy.keytab
-  principal: connect-proxy@EXAMPLE.COM
+  principal: spark-plug@EXAMPLE.COM
   renewal_interval: 3600
 ```
 
-**Env Override:** `SPARK_CONNECT_PROXY_BIND_PORT=9000`
+**Env Override:** `SPARK_PLUG_BIND_PORT=9000`
 
 ## Authentication Flow
 
@@ -184,8 +184,8 @@ cargo run -- --config-file conf/config.yaml
 
 **Docker:**
 ```bash
-docker build -t spark-connect-proxy .          # With plugin
-docker build -t spark-connect-proxy --target base .  # Without
+docker build -t spark-plug .          # With plugin
+docker build -t spark-plug --target base .  # Without
 ```
 
 ## Extending

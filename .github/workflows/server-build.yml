@@ -92,7 +92,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Build the Rust server (release + embed-plugin)
-        run: cargo build --release -p spark-connect-proxy --features embed-plugin
+        run: cargo build --release -p spark-plug --features embed-plugin
 
       - id: determine_version
         name: Determine server version
@@ -109,13 +109,13 @@ jobs:
         run: |
           version=${{ steps.determine_version.outputs.version }}
           mkdir -p dist
-          cp target/release/spark-connect-proxy dist/
-          tarball=spark-connect-proxy-${version}.tgz
-          tar -C dist -czf "$tarball" spark-connect-proxy
+          cp target/release/spark-plug dist/
+          tarball=spark-plug-${version}.tgz
+          tar -C dist -czf "$tarball" spark-plug
           ls -lh "$tarball"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: spark-connect-proxy-${{ steps.determine_version.outputs.version }}.tgz
-          path: spark-connect-proxy-${{ steps.determine_version.outputs.version }}.tgz
+          name: spark-plug-${{ steps.determine_version.outputs.version }}.tgz
+          path: spark-plug-${{ steps.determine_version.outputs.version }}.tgz

@@ -16,7 +16,7 @@
 
 # # Path to the plugin to use. Defaults to use the bundled plugin if included, otherwise the path to the JAR in the
 # # repo for local development.
-# plugin_path: /usr/src/app/plugin/target/scala-2.13/spark-connect-proxy_2.13-0.1.0.jar
+# plugin_path: /usr/src/app/plugin/target/scala-2.13/spark-plug_2.13-0.1.0.jar
 
 # # Time in seconds after which a launched application that has not received its callback will be considered to have failed
 # launch_timeout: 300
@@ -27,7 +27,7 @@
 # # Authentication details for Kerberos. A task will be started for renewing Kerberos credentials at the given renewal_interval rate.
 # kerberos_config:
 #   keytab: /path/to/keytab
-#   principal: connect-proxy/localhost@EXAMPLE.COM
+#   principal: spark-plug/localhost@EXAMPLE.COM
 #   renewal_interval: 3600
 
 # # TLS configuration for the server, with paths to PEM encoded certificate and key files. If this is not provided, TLS it not used.
@@ -43,11 +43,11 @@
 #   options:
 #     header: REMOTE_USER
 # # Bearer token authentication using JWKS. Both JWKS and OIDC configuration URLs are supported
-# # Use a OIDC configuration URL and require the "connect-proxy" audience:
+# # Use a OIDC configuration URL and require the "spark-plug" audience:
 # - name: jwks
 #   options:
 #     oidc_url: http://localhost:8080/realms/test/.well-known/openid-configuration
-#     audience: connect-proxy
+#     audience: spark-plug
 # # Use a JWKS URL and require the "user" audience
 # - name: jwks
 #   options:

@@ -8,12 +8,12 @@ use url::Url;
 // Re-export reqwest ClientBuilder if users need a custom client
 pub use reqwest::ClientBuilder;
 
-pub struct ConnectProxyClient {
+pub struct SparkPlugClient {
     base_url: String,
     client: Client,
 }
 
-impl ConnectProxyClient {
+impl SparkPlugClient {
     pub fn new(url: impl ToString) -> Self {
         let client = Client::new();
 

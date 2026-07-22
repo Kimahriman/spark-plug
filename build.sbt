@@ -6,7 +6,7 @@ lazy val sparkVersion = "4.0.0"
 
 lazy val root = (project in file("."))
   .settings(
-    name := "spark-connect-proxy",
+    name := "spark-plug",
     baseDirectory := baseDirectory.value / "plugin",
     libraryDependencies ++= Seq(
       "org.apache.spark" %% "spark-core" % sparkVersion % Provided,

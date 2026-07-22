@@ -4391,7 +4391,31 @@ dependencies = [
 ]
 
 [[package]]
-name = "spark-connect-proxy"
+name = "spark-connect-rs"
+version = "0.0.2"
+source = "git+https://github.com/apache/spark-connect-rust.git#4f43dfa883fef0861c5c6b87e36320c1cafc4904"
+dependencies = [
+ "arrow",
+ "arrow-ipc",
+ "chrono",
+ "futures-util",
+ "http-body 0.4.6",
+ "prost",
+ "prost-types",
+ "rand 0.9.5",
+ "regex",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tonic",
+ "tonic-build",
+ "tower 0.5.3",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "spark-plug"
 version = "0.3.0"
 dependencies = [
  "anyhow",
@@ -4424,7 +4448,7 @@ dependencies = [
  "sea-orm",
  "sea-orm-migration",
  "serde",
- "spark-connect-proxy-client",
+ "spark-plug-client",
  "tempfile",
  "thiserror",
  "tokio",
@@ -4437,7 +4461,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "spark-connect-proxy-client"
+name = "spark-plug-client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -4447,30 +4471,6 @@ dependencies = [
  "spark-connect-rs",
  "tokio",
  "url",
-]
-
-[[package]]
-name = "spark-connect-rs"
-version = "0.0.2"
-source = "git+https://github.com/apache/spark-connect-rust.git#4f43dfa883fef0861c5c6b87e36320c1cafc4904"
-dependencies = [
- "arrow",
- "arrow-ipc",
- "chrono",
- "futures-util",
- "http-body 0.4.6",
- "prost",
- "prost-types",
- "rand 0.9.5",
- "regex",
- "serde_json",
- "thiserror",
- "tokio",
- "tonic",
- "tonic-build",
- "tower 0.5.3",
- "url",
- "uuid",
 ]
 
 [[package]]

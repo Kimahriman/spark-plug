@@ -209,7 +209,7 @@ pub(crate) async fn send_session_message(
             "http://{address}/spark.connect.SparkConnectService/Config"
         ))
         .bearer_auth(token)
-        .header("X-Connect-Proxy", message)
+        .header("X-Spark-Plug", message)
         .header("Content-Type", "application/grpc")
         .header("TE", "trailers")
         .send()

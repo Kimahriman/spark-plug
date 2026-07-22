@@ -34,7 +34,7 @@ services:
       - keycloak
 
   resourcemanager:
-    image: spark-connect-proxy-hadoop
+    image: spark-plug-hadoop
     build:
       dockerfile: dev/Dockerfile-hadoop
     ports:
@@ -49,7 +49,7 @@ services:
       - hadoop
 
   nodemanager:
-    image: spark-connect-proxy-hadoop
+    image: spark-plug-hadoop
     build:
       dockerfile: dev/Dockerfile-hadoop
     ports:

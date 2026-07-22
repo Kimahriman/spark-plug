@@ -1,4 +1,4 @@
-package org.apache.spark.sql.connect.proxy
+package org.apache.spark.sql.sparkplug
 
 import java.util.concurrent.TimeUnit
 
@@ -14,16 +14,16 @@ object Config {
   }
 
   // The auth token that must be used by the client to connect
-  val SPARK_CONNECT_PROXY_CALLBACK =
-    ConfigBuilder("spark.connect.proxy.callback")
+  val SPARK_PLUG_CALLBACK =
+    ConfigBuilder("spark.plug.callback")
       .stringConf
       .createWithDefaultFunction { () =>
         throw new IllegalArgumentException("Proxy callback must be provided")
       }
 
   // How long after no activity do we kill the session
-  val SPARK_CONNECT_PROXY_IDLE_TIMEOUT =
-    ConfigBuilder("spark.connect.proxy.idle.timeout")
+  val SPARK_PLUG_IDLE_TIMEOUT =
+    ConfigBuilder("spark.plug.idle.timeout")
       .timeConf(TimeUnit.SECONDS)
       .createOptional
 }

@@ -2,8 +2,8 @@ mod test {
     use std::{collections::HashMap, io::Write, time::Duration};
 
     use reqwest::ClientBuilder;
-    use spark_connect_proxy::config::{ProxyConfig, TlsConfig};
-    use spark_connect_proxy_client::ConnectProxyClient;
+    use spark_plug::config::{ProxyConfig, TlsConfig};
+    use spark_plug_client::SparkPlugClient;
     use tempfile::NamedTempFile;
 
     struct Server {
@@ -21,7 +21,7 @@ mod test {
                     tls,
                     ..Default::default()
                 };
-                spark_connect_proxy::Server::from_config(config)
+                spark_plug::Server::from_config(config)
                     .await
                     .unwrap()
                     .run()
@@ -50,7 +50,7 @@ mod test {
 
         let _server = Server::start(None).await;
 
-        let proxy_client = ConnectProxyClient::new("http://localhost:8100");
+        let proxy_client = SparkPlugClient::new("http://localhost:8100");
 
         let app = proxy_client
             .create_application(None, HashMap::new())
@@ -99,7 +99,7 @@ mod test {
             .build()
             .unwrap();
 
-        let proxy_client = ConnectProxyClient::from_client("https://localhost:8100", client);
+        let proxy_client = SparkPlugClient::from_client("https://localhost:8100", client);
 
         let app = proxy_client
             .create_application(None, HashMap::new())

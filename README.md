@@ -1,6 +1,6 @@
-# Spark Connect Proxy
+# Spark Plug
 
-Spark Connect Proxy serves as both an API for creating remote Spark sessions and a proxy for accessing remote [Spark Connect](https://spark.apache.org/docs/latest/spark-connect-overview.html) sessions in a distributed compute environment such as YARN.
+Spark Plug serves as both an API for creating remote Spark sessions and a proxy for accessing remote [Spark Connect](https://spark.apache.org/docs/latest/spark-connect-overview.html) sessions in a distributed compute environment such as YARN.
 
 Spark Connect provides a new way to interact with Spark sessions remotely, but has a few limitations preventing it from being usable in a secure, multi-tenant, distributed compute environment:
 - There is no built-in authentication mechanism. Any session started in a remote cluster accessible by other users can be connected to by any other user that knows about it. Spark documentation suggests using external proxies to enforce security, but this is not possible in flat distributed compute environments such as YARN.
@@ -109,11 +109,11 @@ cargo build --release --features embed-plugin
 To build the Docker image with the server and plugin built-in:
 
 ```bash
-docker build -t spark-connect-proxy .
+docker build -t spark-plug .
 ```
 
 This includes a version of Spark. To build a Sparkless image to add your own Spark version (or multiple Spark versions):
 
 ```bash
-docker build -t spark-connect-proxy --target base .
+docker build -t spark-plug --target base .
 ```
