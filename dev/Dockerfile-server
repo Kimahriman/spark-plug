@@ -1,4 +1,4 @@
-FROM rust:1.88 AS rust-builder
+FROM rust:1 AS rust-builder
 
 ARG TARGETPLATFORM
 ARG SPARK_VERSION=4.0.1

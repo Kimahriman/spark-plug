@@ -1,4 +1,4 @@
-FROM rust:1.88 AS rust-builder
+FROM rust:1 AS rust-builder
 
 WORKDIR /usr/src/app
 
@@ -8,13 +8,13 @@ RUN --mount=type=cache,target=/usr/src/app/target/ \
     --mount=type=cache,target=/usr/local/cargo/registry/ \
     cargo install --path .
 
-FROM eclipse-temurin:17 AS java-builder
+FROM chainguard/wolfi-base AS java-builder
 
-ARG SBT_VERSION=1.10.11
+RUN apk update && \
+    apk add openjdk-17 sbt
 
-RUN wget -q https://github.com/sbt/sbt/releases/download/v${SBT_VERSION}/sbt-${SBT_VERSION}.tgz && \
-    tar -xf sbt-${SBT_VERSION}.tgz -C /opt && \
-    /opt/sbt/bin/sbt --version
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk
+ENV PATH=$PATH:$JAVA_HOME/bin
 
 WORKDIR /usr/src/app
 
@@ -24,13 +24,12 @@ COPY project /usr/src/app/project
 
 RUN --mount=type=cache,target=/root/.cache/coursier \
     --mount=type=cache,target=/root/.sbt \
-    /opt/sbt/bin/sbt package
+    sbt package
 
-FROM ubuntu:noble AS base
+FROM chainguard/wolfi-base as base
 
-RUN apt-get update && \
-    apt-get install -y openjdk-17-jre-headless wget && \
-    ln -s /usr/lib/jvm/java-17-openjdk-$(dpkg --print-architecture) /usr/lib/jvm/java-17-openjdk
+RUN apk update && \
+    apk add openjdk-17 wget python-3.12-base python-3.14-base
 
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk
 
@@ -46,21 +45,13 @@ ENV SPARK_PLUG_PLUGIN_PATH=/opt/spark-plug/spark-plug_2.13.jar
 
 CMD ["/opt/spark-plug/spark-plug"]
 
-FROM ubuntu:noble AS spark-cache
+FROM base
 
-ARG SPARK_VERSION=4.0.1
-
-RUN apt-get update && \
-    apt-get install -y wget
+ARG SPARK_VERSION=4.2.0
 
 RUN wget -q https://dlcdn.apache.org/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop3.tgz && \
     tar -xf spark-${SPARK_VERSION}-bin-hadoop3.tgz -C /opt && \
+    ln -s /opt/spark-${SPARK_VERSION}-bin-hadoop3 /opt/spark && \
     rm -rf spark-${SPARK_VERSION}-bin-hadoop3.tgz
-
-FROM base
-
-ARG SPARK_VERSION=4.0.1
-
-COPY --from=spark-cache /opt/spark-${SPARK_VERSION}-bin-hadoop3 /opt/spark
 
 ENV SPARK_HOME=/opt/spark
