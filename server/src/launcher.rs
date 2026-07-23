@@ -139,6 +139,11 @@ impl SparkLauncher {
 
         info!("Using plugin at {plugin_path}");
 
+        info!("Using Spark versions:");
+        for version in versions.iter() {
+            info!("{version:?}");
+        }
+
         Self {
             versions,
             callback_addr,

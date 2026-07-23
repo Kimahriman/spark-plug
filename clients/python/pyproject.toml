@@ -3,10 +3,9 @@ name = "spark-plug-client"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12,<3.15"
 dependencies = [
     "pyspark-client>=4.0.0",
-    "protobuf<6",
     "requests>=2",
 ]
 

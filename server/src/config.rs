@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 const DEFAULT_PORT: u16 = 8100;
 
-#[derive(Clone, Default, Deserialize)]
+#[derive(Clone, Default, Deserialize, Debug)]
 pub struct SparkVersion {
     // Name shown to users
     pub name: String,
