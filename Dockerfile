@@ -29,7 +29,7 @@ RUN --mount=type=cache,target=/root/.cache/coursier \
 FROM chainguard/wolfi-base as base
 
 RUN apk update && \
-    apk add bash wget openjdk-17 python-3.12-base python-3.14-base uv
+    apk add bash wget openjdk-17 python-3.12-base-dev python-3.14-base-dev uv krb5
 
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk
 
