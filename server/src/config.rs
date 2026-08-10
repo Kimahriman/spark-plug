@@ -54,6 +54,9 @@ pub struct ProxyConfig {
     // a `{{ application_id }}` placeholder that will be replaced with the app id.
     // Example: "https://knox.example.com/gateway/default/yarn/app/{{ application_id }}"
     pub ui_url_template: Option<String>,
+    // Optional template for constructing an application log URL. Template should include
+    // a `{{ application_id }}` placeholder that will be replaced with the app id.
+    pub log_url_template: Option<String>,
     pub plugin_path: Option<String>,
     pub launch_timeout: Option<u32>,
     pub session_timeout: Option<u32>,
@@ -99,6 +102,20 @@ impl ProxyConfig {
     /// None/empty, returns None.
     pub fn render_ui_url(&self, application_id: Option<&str>) -> Option<String> {
         let tpl = self.ui_url_template.as_ref()?;
+        let app_id = application_id?;
+        if app_id.is_empty() {
+            return None;
+        }
+
+        let rendered = render!(tpl, application_id => app_id);
+        Some(rendered)
+    }
+
+    /// Render a log URL for the provided application id using the configured
+    /// `log_url_template`. If no template is configured or application_id is
+    /// None/empty, returns None.
+    pub fn render_log_url(&self, application_id: Option<&str>) -> Option<String> {
+        let tpl = self.log_url_template.as_ref()?;
         let app_id = application_id?;
         if app_id.is_empty() {
             return None;

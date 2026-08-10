@@ -8,6 +8,11 @@
 # # proxy if needed. Default is the default IP of the host and bind_port
 # callback_address: http://127.0.0.1:8100
 
+# # Optional templates for application UI and log URLs. The application_id placeholder is replaced
+# # with the YARN/Spark application id once the driver registers its callback.
+# ui_url_template: https://knox.example.com/gateway/default/yarn/app/{{ application_id }}
+# log_url_template: https://knox.example.com/gateway/default/yarn/logs/{{ application_id }}
+
 # # URL of a database to store sessions in. Options include:
 # # - `sqlite::memory:` for storing sessions in an in-memory SQLite database. This does not persist across restarts.
 # # - `sqlite:///path/to/db` for storing sessions in a on-disk SQLite database. This does persist across restarts.

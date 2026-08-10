@@ -92,4 +92,5 @@ pub struct Application {
     pub id: i32,
     pub token: String,
     pub active: bool,
+    pub log_url: Option<String>,
 }

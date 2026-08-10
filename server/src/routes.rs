@@ -90,6 +90,8 @@ pub struct ApplicationInfo {
     active: bool,
     // Optional generated UI URL for the application (from config.template)
     ui_url: Option<String>,
+    // Optional generated log URL for the application (from config.template)
+    log_url: Option<String>,
 }
 
 async fn create_app<L: Launcher>(
@@ -169,6 +171,7 @@ async fn create_app<L: Launcher>(
 
     // Build response including UI URL if configured
     let ui_url = state.config.render_ui_url(res.application_id.as_deref());
+    let log_url = state.config.render_log_url(res.application_id.as_deref());
 
     let info = ApplicationInfo {
         id: res.id,
@@ -177,6 +180,7 @@ async fn create_app<L: Launcher>(
         state: res.state.to_value().to_string(),
         active: res.address.is_some(),
         ui_url,
+        log_url,
     };
 
     Ok(Json(info))
@@ -199,6 +203,7 @@ async fn get_app<L: Launcher>(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let ui_url = state.config.render_ui_url(app.application_id.as_deref());
+    let log_url = state.config.render_log_url(app.application_id.as_deref());
     let info = ApplicationInfo {
         id: app.id,
         name: app.name,
@@ -206,6 +211,7 @@ async fn get_app<L: Launcher>(
         state: app.state.to_value().to_string(),
         active: app.address.is_some(),
         ui_url,
+        log_url,
     };
 
     Ok(Json(info))
@@ -253,6 +259,7 @@ async fn list_apps<L: Launcher>(
             state: app.state.to_value().to_string(),
             active: app.address.is_some(),
             ui_url: state.config.render_ui_url(app.application_id.as_deref()),
+            log_url: state.config.render_log_url(app.application_id.as_deref()),
         })
         .collect();
 
@@ -555,6 +562,10 @@ mod test {
                 "https://knox.example.com/gateway/default/yarn/app/{{ application_id }}"
                     .to_string(),
             ),
+            log_url_template: Some(
+                "https://knox.example.com/gateway/default/yarn/logs/{{ application_id }}"
+                    .to_string(),
+            ),
             ..Default::default()
         };
         let server = create_test_server_with_config(config).await;
@@ -571,6 +582,7 @@ mod test {
 
         // Initially, UI URL should be None since application_id is not set
         assert_eq!(app.ui_url, None);
+        assert_eq!(app.log_url, None);
         assert_eq!(app.state, "LAUNCHING");
 
         // Send callback with application_id
@@ -599,6 +611,50 @@ mod test {
         assert_eq!(
             updated_app.ui_url,
             Some("https://knox.example.com/gateway/default/yarn/app/app-20251119-001".to_string())
+        );
+        assert_eq!(
+            updated_app.log_url,
+            Some("https://knox.example.com/gateway/default/yarn/logs/app-20251119-001".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_log_url_rendering_in_list() {
+        let config = crate::config::ProxyConfig {
+            log_url_template: Some("https://example.com/logs/{{ application_id }}".to_string()),
+            ..Default::default()
+        };
+        let server = create_test_server_with_config(config).await;
+
+        let app = server
+            .post("/apps")
+            .add_header("REMOTE_USER", "user1")
+            .json(&CreateApplicationRequest::default())
+            .await
+            .json::<ApplicationInfo>();
+
+        server
+            .post("/callback")
+            .authorization_bearer(app.token.clone())
+            .json(&ApplicationCallbackRequest {
+                address: "localhost:12345".to_string(),
+                application_id: "spark-app-logs".to_string(),
+            })
+            .await
+            .assert_status(StatusCode::OK);
+
+        let apps = server
+            .get("/apps")
+            .add_header("REMOTE_USER", "user1")
+            .await
+            .json::<Vec<ApplicationInfo>>();
+
+        assert_eq!(
+            apps.iter()
+                .find(|candidate| candidate.id == app.id)
+                .unwrap()
+                .log_url,
+            Some("https://example.com/logs/spark-app-logs".to_string())
         );
     }
 

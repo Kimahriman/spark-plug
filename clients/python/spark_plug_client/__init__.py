@@ -14,10 +14,11 @@ class Application:
     id: int
     token: str
     name: Optional[str] = None
+    log_url: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Application":
-        return cls(data["id"], data["token"], data.get("name"))
+        return cls(data["id"], data["token"], data.get("name"), data.get("log_url"))
 
 
 class SparkPlugClient:
