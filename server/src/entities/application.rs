@@ -16,6 +16,7 @@ pub enum State {
     FINISHED,
 }
 
+#[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, Serialize, Deserialize)]
 #[sea_orm(table_name = "application")]
 pub struct Model {
@@ -29,8 +30,5 @@ pub struct Model {
     pub address: Option<String>,
     pub application_id: Option<String>,
 }
-
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}

@@ -419,7 +419,7 @@ mod test {
         )
         .await;
 
-        TestServer::new(router).unwrap()
+        TestServer::new(router)
     }
 
     #[tokio::test]
@@ -814,7 +814,7 @@ mod test {
             },
         )
         .await;
-        let server = TestServer::new(router).unwrap();
+        let server = TestServer::new(router);
 
         let first = server
             .post("/apps")
