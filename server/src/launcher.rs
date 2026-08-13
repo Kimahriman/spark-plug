@@ -375,10 +375,18 @@ impl SparkLauncher {
         }
 
         if let Some(venv_tarball) = venv_tarball {
-            args.extend([
-                "--archives".to_string(),
-                format!("{venv_tarball}#environment"),
-            ]);
+            let venv_archive = format!("{venv_tarball}#environment");
+            match configs.get_mut("spark.archives") {
+                Some(archives) if !archives.is_empty() => {
+                    archives.push(',');
+                    archives.push_str(&venv_archive);
+                }
+                Some(archives) => *archives = venv_archive,
+                None => {
+                    configs.insert("spark.archives".to_string(), venv_archive);
+                }
+            }
+
             // Python workers get run with a session-specific sub directory
             // so we need to get the environment from the parent directory
             configs.insert(
@@ -636,6 +644,51 @@ mod test {
         let (pairs, _script) = args_ref.as_chunks::<2>();
 
         assert!(pairs.contains(&["--conf", &format!("{APP_NAME_CONFIG}=custom-app-name")]));
+    }
+
+    #[test]
+    fn test_build_command_merges_python_environment_into_archives_config() {
+        let launcher = SparkLauncher {
+            versions: vec![SparkVersion {
+                name: "default".to_string(),
+                home: "/opt/spark".to_string(),
+                ..Default::default()
+            }],
+            callback_addr: "http://localhost:8100".to_string(),
+            launch_timeout: 60,
+            session_timeout: 60,
+            plugin_path: "/path/to/plugin".to_string(),
+            plugin_temp_path: None,
+        };
+
+        let user_config = vec![(
+            "spark.archives".to_string(),
+            "s3://bucket/archive.tar.gz#archive".to_string(),
+        )]
+        .into_iter()
+        .collect();
+
+        let (_command, args) = launcher
+            .build_submit_command(
+                &launcher.versions[0],
+                1,
+                None,
+                "user".to_string(),
+                "abcd".to_string(),
+                user_config,
+                Some("/tmp/python-environment.tgz".to_string()),
+            )
+            .unwrap();
+
+        let archives_config = args
+            .iter()
+            .find_map(|arg| arg.strip_prefix("spark.archives="))
+            .expect("spark.archives config should be present");
+        assert_eq!(
+            archives_config,
+            "s3://bucket/archive.tar.gz#archive,/tmp/python-environment.tgz#environment"
+        );
+        assert!(!args.iter().any(|arg| arg == "--archives"));
     }
 
     #[test]
