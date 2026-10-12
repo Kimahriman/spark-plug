@@ -38,6 +38,9 @@ static PLUGIN_BINARY: Option<&[u8]> = Some(include_bytes!(
 #[cfg(not(feature = "embed-plugin"))]
 static PLUGIN_BINARY: Option<&[u8]> = None;
 
+// Can be removed with next clippy release
+// https://github.com/rust-lang/rust-clippy/commit/bdce5b96bff481cc07641db903213bc5fa927c96
+#[allow(clippy::double_must_use)]
 #[async_trait::async_trait]
 pub trait Launcher: Clone + Send + Sync {
     fn get_versions(&self) -> Vec<String>;
