@@ -2,6 +2,8 @@ services:
   server:
     build:
       dockerfile: dev/Dockerfile-server
+      args:
+        SPARK_VERSION: ${SPARK_VERSION:-4.0.4}
     environment:
       HADOOP_CONF_DIR: /usr/src/app/dev
     volumes:
