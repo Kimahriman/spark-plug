@@ -4,6 +4,7 @@ target/
 .metals/
 .venv/
 .vscode/
+.env
 
 metals.sbt
 __pycache__
