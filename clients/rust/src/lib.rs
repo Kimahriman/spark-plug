@@ -69,6 +69,7 @@ impl SparkPlugClient {
             SparkSessionBuilder::new()
                 .remote(&connection)
                 .get_or_create()
+                .map_err(anyhow::Error::from)
         })
         .await??;
 

@@ -85,6 +85,20 @@ sbt package
 cargo run
 ```
 
+### Pre-commit checks
+Sync the project dependencies to install `prek` from the development dependency group, then install its Git hook from the repository root:
+
+```bash
+uv sync
+uv run prek install
+```
+
+The hooks check Rust formatting and run Clippy across all workspace targets. To run them manually:
+
+```bash
+uv run prek run --all-files
+```
+
 ### Run tests
 [Install UV](https://docs.astral.sh/uv/getting-started/installation)
 The integration test requires access to Spark, which can be installed through the parent UV project.

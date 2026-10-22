@@ -8,6 +8,7 @@ requires-python = ">=3.12"
 [dependency-groups]
 dev = [
     "mypy>=1.15.0",
+    "prek>=0.5.7",
     "pyspark[connect]>=4.0.0",
     "ruff>=0.9.7",
 ]

@@ -1,0 +1,18 @@
+[[repos]]
+repo = "local"
+
+[[repos.hooks]]
+id = "cargo-fmt"
+name = "cargo fmt"
+entry = "cargo fmt --all -- --check"
+language = "system"
+pass_filenames = false
+files = '(^|/)(Cargo\.toml|Cargo\.lock|prek\.toml)$|\.rs$'
+
+[[repos.hooks]]
+id = "cargo-clippy"
+name = "cargo clippy"
+entry = "cargo clippy --workspace --all-targets -- -D warnings"
+language = "system"
+pass_filenames = false
+files = '(^|/)(Cargo\.toml|Cargo\.lock|prek\.toml)$|\.rs$'
