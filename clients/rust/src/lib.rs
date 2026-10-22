@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use spark_connect_rs::{SparkSession, SparkSessionBuilder};
+use spark_connect::{SparkSession, SparkSessionBuilder};
 use url::Url;
 
 // Re-export reqwest ClientBuilder if users need a custom client
@@ -65,7 +65,12 @@ impl SparkPlugClient {
 
         let connection = format!("{}/;token={}{use_ssl}", sc_url, app.token);
 
-        let session = SparkSessionBuilder::remote(&connection).build().await?;
+        let session = tokio::task::spawn_blocking(move || {
+            SparkSessionBuilder::new()
+                .remote(&connection)
+                .get_or_create()
+        })
+        .await??;
 
         Ok(session)
     }
