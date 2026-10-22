@@ -58,12 +58,11 @@ mod test {
             .unwrap();
 
         let session = proxy_client.create_session(&app).await.unwrap();
-        let count = tokio::task::spawn_blocking(move || {
-            session.range(10).and_then(|df| df.count())
-        })
-        .await
-        .unwrap()
-        .unwrap();
+        let count =
+            tokio::task::spawn_blocking(move || session.range(10).and_then(|df| df.count()))
+                .await
+                .unwrap()
+                .unwrap();
 
         assert_eq!(count, 10);
 
@@ -112,12 +111,11 @@ mod test {
             .unwrap();
 
         let session = proxy_client.create_session(&app).await.unwrap();
-        let count = tokio::task::spawn_blocking(move || {
-            session.range(10).and_then(|df| df.count())
-        })
-        .await
-        .unwrap()
-        .unwrap();
+        let count =
+            tokio::task::spawn_blocking(move || session.range(10).and_then(|df| df.count()))
+                .await
+                .unwrap()
+                .unwrap();
 
         assert_eq!(count, 10);
 
