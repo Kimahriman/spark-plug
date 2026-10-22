@@ -346,7 +346,10 @@ fn load_tls_acceptor(config: &ProxyConfig) -> Result<Option<TlsAcceptor>, io::Er
             .collect::<io::Result<Vec<_>>>()?;
         let key = private_key(&mut io::BufReader::new(fs::File::open(&tls_config.key)?))?.unwrap();
 
-        let mut config = rustls::ServerConfig::builder()
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let mut config = rustls::ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?
             .with_no_client_auth()
             .with_single_cert(certs, key)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
