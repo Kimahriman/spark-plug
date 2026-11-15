@@ -19,6 +19,11 @@ pub struct SparkVersion {
     pub master: Option<String>,
     pub deploy_mode: Option<String>,
     pub proxy_user: Option<bool>,
+    // Optional fixed Spark proxy user. When set, this takes precedence over `proxy_user`.
+    pub proxy_user_name: Option<String>,
+    // Spark versions can restrict application creation to JWT roles at this claim path.
+    pub allowed_roles: Option<Vec<String>>,
+    pub roles_path: Option<String>,
     pub env: Option<HashMap<String, String>>,
     pub default_configs: Option<HashMap<String, String>>,
     pub merge_configs: Option<HashMap<String, String>>,

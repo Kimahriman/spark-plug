@@ -18,8 +18,8 @@ use tower_http::auth::AsyncRequireAuthorizationLayer;
 use uuid::Uuid;
 
 use crate::{
-    auth::{BearerToken, TokenAuth, UserAuth, UserId},
-    config::ProxyConfig,
+    auth::{BearerToken, JwtAccessTokenClaims, TokenAuth, UserAuth, UserId},
+    config::{ProxyConfig, SparkVersion},
     entities::application,
     launcher::Launcher,
     proxy::UpstreamConnectionCache,
@@ -97,8 +97,19 @@ pub struct ApplicationInfo {
 async fn create_app<L: Launcher>(
     State(state): State<AppStateDyn<L>>,
     Extension(user): Extension<UserId>,
+    access_token_claims: Option<Extension<JwtAccessTokenClaims>>,
     Json(params): Json<CreateApplicationRequest>,
 ) -> Result<Json<ApplicationInfo>, StatusCode> {
+    let version = state
+        .launcher
+        .resolve_version(params.version.as_deref())
+        .ok_or(StatusCode::BAD_REQUEST)?;
+
+    let claims = access_token_claims.map(|Extension(claims)| claims);
+    if !version_allows_roles(&version, claims.as_ref()) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
     let name = params.name;
     let token = Uuid::new_v4().to_string();
 
@@ -118,7 +129,7 @@ async fn create_app<L: Launcher>(
     let launch = state
         .launcher
         .launch(
-            params.version.as_ref().map(|s| s.as_ref()),
+            version,
             res.id,
             name,
             user.0,
@@ -184,6 +195,39 @@ async fn create_app<L: Launcher>(
     };
 
     Ok(Json(info))
+}
+
+fn version_allows_roles(version: &SparkVersion, claims: Option<&JwtAccessTokenClaims>) -> bool {
+    let Some(allowed_roles) = version.allowed_roles.as_deref() else {
+        return true;
+    };
+    let Some(role_path) = version.roles_path.as_deref() else {
+        return false;
+    };
+    let Some(claims) = claims else {
+        return false;
+    };
+    let Some(role_value) = claim_at_path(&claims.0, role_path) else {
+        return false;
+    };
+
+    match role_value {
+        serde_json::Value::String(role) => allowed_roles.iter().any(|allowed| allowed == role),
+        serde_json::Value::Array(roles) => roles
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .any(|role| allowed_roles.iter().any(|allowed| allowed == role)),
+        _ => false,
+    }
+}
+
+fn claim_at_path<'a>(claims: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+    if path.starts_with('/') {
+        return claims.pointer(path);
+    }
+
+    path.split('.')
+        .try_fold(claims, |value, key| value.get(key))
 }
 
 async fn get_app<L: Launcher>(
@@ -400,11 +444,16 @@ mod test {
     use axum_test::TestServer;
     use http::StatusCode;
     use sea_orm::{ActiveModelTrait, ActiveValue, prelude::DateTimeUtc};
+    use serde_json::json;
 
     use crate::{
-        auth::{CurrentUserAuth, RemoteUserAuth, UserAuth},
+        auth::{CurrentUserAuth, JwtAccessTokenClaims, RemoteUserAuth, UserAuth},
+        config::SparkVersion,
         entities::application,
-        routes::{ApplicationCallbackRequest, ApplicationInfo, CreateApplicationRequest},
+        routes::{
+            ApplicationCallbackRequest, ApplicationInfo, CreateApplicationRequest, claim_at_path,
+            version_allows_roles,
+        },
         test_utils::create_test_router_with_config,
     };
 
@@ -427,6 +476,27 @@ mod test {
         .await;
 
         TestServer::new(router)
+    }
+
+    #[test]
+    fn test_extracts_role_claim_from_nested_access_token() {
+        let claims = json!({
+            "sub": "alice",
+            "realm_access": {
+                "roles": ["spark-user", "spark-admin"]
+            }
+        });
+        let role_claim = claim_at_path(&claims, "realm_access.roles").unwrap();
+        assert_eq!(role_claim, &json!(["spark-user", "spark-admin"]));
+
+        let version = SparkVersion {
+            name: "restricted".to_string(),
+            allowed_roles: Some(vec!["spark-admin".to_string()]),
+            roles_path: Some("realm_access.roles".to_string()),
+            ..Default::default()
+        };
+        let token_claims = JwtAccessTokenClaims(claims);
+        assert!(version_allows_roles(&version, Some(&token_claims)));
     }
 
     #[tokio::test]
