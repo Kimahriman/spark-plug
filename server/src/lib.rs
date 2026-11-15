@@ -406,6 +406,7 @@ pub(crate) mod test_utils {
     };
 
     use super::{ProxyConfig, Router, Server};
+    use crate::config::SparkVersion;
 
     #[derive(Clone)]
     pub(crate) struct MockLauncher;
@@ -416,9 +417,19 @@ pub(crate) mod test_utils {
             vec!["4.0.0".to_string()]
         }
 
+        fn resolve_version(&self, version_name: Option<&str>) -> Option<SparkVersion> {
+            match version_name {
+                Some("4.0.0") | None => Some(SparkVersion {
+                    name: "4.0.0".to_string(),
+                    ..Default::default()
+                }),
+                Some(_) => None,
+            }
+        }
+
         async fn launch(
             &self,
-            _version_name: Option<&str>,
+            _version: SparkVersion,
             _session_id: i32,
             _app_name: Option<String>,
             _username: String,

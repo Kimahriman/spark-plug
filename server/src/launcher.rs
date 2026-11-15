@@ -44,11 +44,12 @@ static PLUGIN_BINARY: Option<&[u8]> = None;
 #[async_trait::async_trait]
 pub trait Launcher: Clone + Send + Sync {
     fn get_versions(&self) -> Vec<String>;
+    fn resolve_version(&self, version_name: Option<&str>) -> Option<SparkVersion>;
 
     #[allow(clippy::too_many_arguments)]
     async fn launch(
         &self,
-        version_name: Option<&str>,
+        version: SparkVersion,
         session_id: i32,
         app_name: Option<String>,
         username: String,
@@ -102,6 +103,12 @@ impl SparkLauncher {
 
         // Check all the Spark directories exist
         for version in versions.iter() {
+            assert_eq!(
+                version.allowed_roles.is_some(),
+                version.roles_path.is_some(),
+                "Both allowed_roles and roles_path must be configured together for Spark version {}",
+                version.name
+            );
             assert!(
                 std::path::Path::new(&version.home).exists(),
                 "Home directory not found for version {}: {}",
@@ -404,7 +411,9 @@ impl SparkLauncher {
 
         args.extend(["--class".to_string(), SERVER_CLASS.to_string()]);
 
-        if version.proxy_user.unwrap_or_default() {
+        if let Some(proxy_user) = version.proxy_user_name.as_ref() {
+            args.extend(["--proxy-user".to_string(), proxy_user.clone()]);
+        } else if version.proxy_user.unwrap_or_default() {
             args.extend(["--proxy-user".to_string(), username]);
         }
 
@@ -437,9 +446,20 @@ impl Launcher for SparkLauncher {
         self.versions.iter().map(|v| v.name.clone()).collect()
     }
 
+    fn resolve_version(&self, version_name: Option<&str>) -> Option<SparkVersion> {
+        match version_name {
+            Some(name) => self
+                .versions
+                .iter()
+                .find(|version| version.name == name)
+                .cloned(),
+            None => self.versions.first().cloned(),
+        }
+    }
+
     async fn launch(
         &self,
-        version_name: Option<&str>,
+        version: SparkVersion,
         session_id: i32,
         app_name: Option<String>,
         username: String,
@@ -447,18 +467,6 @@ impl Launcher for SparkLauncher {
         user_config: HashMap<String, String>,
         python_packages: Option<Vec<String>>,
     ) -> Result<JoinHandle<()>, io::Error> {
-        let version = if let Some(name) = version_name {
-            self.versions
-                .iter()
-                .find(|v| v.name == name)
-                .ok_or(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("Version named {name} not found"),
-                ))?
-        } else {
-            &self.versions[0]
-        };
-
         let mut env = version.env.clone().unwrap_or_default();
         env.insert("SPARK_HOME".to_string(), version.home.clone());
 
@@ -478,7 +486,7 @@ impl Launcher for SparkLauncher {
         };
 
         let (submit_path, args) = self.build_submit_command(
-            version,
+            &version,
             session_id,
             app_name,
             username,

@@ -4,10 +4,10 @@ use anyhow::Result;
 use axum::response::IntoResponse;
 use futures_util::future::BoxFuture;
 use http::{HeaderMap, Request, Response, StatusCode, header::AUTHORIZATION};
-use jsonwebtoken::{Algorithm, DecodingKey, TokenData, Validation, decode, decode_header};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use jwks::Jwks;
 use log::{info, warn};
-use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tower_http::auth::AsyncAuthorizeRequest;
 
 use crate::config::ProxyConfig;
@@ -17,6 +17,29 @@ pub struct UserId(pub String);
 
 #[derive(Clone)]
 pub struct BearerToken(pub String);
+
+#[derive(Clone)]
+pub(crate) struct JwtAccessTokenClaims(pub Value);
+
+pub(crate) struct AuthenticatedUser {
+    username: String,
+    jwt_claims: Option<Value>,
+}
+
+impl AuthenticatedUser {
+    fn from_jwt_claims(claims: Value) -> Result<Self> {
+        let username = claims
+            .get("sub")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("JWT does not contain a string subject claim"))?
+            .to_string();
+
+        Ok(Self {
+            username,
+            jwt_claims: Some(claims),
+        })
+    }
+}
 
 fn extract_bearer_token(header_map: &HeaderMap) -> Result<Option<&str>> {
     Ok(header_map
@@ -28,14 +51,17 @@ fn extract_bearer_token(header_map: &HeaderMap) -> Result<Option<&str>> {
 }
 
 pub(crate) trait UserAuthMethod: Sync + Send {
-    fn authorize_user(&self, header_map: &HeaderMap) -> Result<Option<String>>;
+    fn authorize_user(&self, header_map: &HeaderMap) -> Result<Option<AuthenticatedUser>>;
 }
 
 pub(crate) struct CurrentUserAuth {}
 
 impl UserAuthMethod for CurrentUserAuth {
-    fn authorize_user(&self, _: &HeaderMap) -> Result<Option<String>> {
-        Ok(Some(whoami::username()?))
+    fn authorize_user(&self, _: &HeaderMap) -> Result<Option<AuthenticatedUser>> {
+        Ok(Some(AuthenticatedUser {
+            username: whoami::username()?,
+            jwt_claims: None,
+        }))
     }
 }
 
@@ -61,16 +87,15 @@ impl RemoteUserAuth {
 }
 
 impl UserAuthMethod for RemoteUserAuth {
-    fn authorize_user(&self, header_map: &HeaderMap) -> Result<Option<String>> {
+    fn authorize_user(&self, header_map: &HeaderMap) -> Result<Option<AuthenticatedUser>> {
         Ok(header_map
             .get(&self.header)
-            .and_then(|h| h.to_str().ok().map(|v| v.to_string())))
+            .and_then(|h| h.to_str().ok().map(|v| v.to_string()))
+            .map(|username| AuthenticatedUser {
+                username,
+                jwt_claims: None,
+            }))
     }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct JWTClaims {
-    sub: String,
 }
 
 struct JWTAuth {
@@ -118,10 +143,12 @@ impl JWTAuth {
 }
 
 impl UserAuthMethod for JWTAuth {
-    fn authorize_user(&self, header_map: &HeaderMap) -> Result<Option<String>> {
+    fn authorize_user(&self, header_map: &HeaderMap) -> Result<Option<AuthenticatedUser>> {
         if let Some(token) = extract_bearer_token(header_map)? {
-            let decoded_token: TokenData<JWTClaims> = decode(token, &self.key, &self.validation)?;
-            Ok(Some(decoded_token.claims.sub))
+            let decoded_token = decode::<Value>(token, &self.key, &self.validation)?;
+            Ok(Some(AuthenticatedUser::from_jwt_claims(
+                decoded_token.claims,
+            )?))
         } else {
             Ok(None)
         }
@@ -153,7 +180,7 @@ impl JWKSAuth {
 }
 
 impl UserAuthMethod for JWKSAuth {
-    fn authorize_user(&self, header_map: &HeaderMap) -> Result<Option<String>> {
+    fn authorize_user(&self, header_map: &HeaderMap) -> Result<Option<AuthenticatedUser>> {
         if let Some(token) = extract_bearer_token(header_map)? {
             let header = decode_header(token)?;
             let kid = header
@@ -175,9 +202,10 @@ impl UserAuthMethod for JWKSAuth {
             if let Some(audience) = self.audience.as_ref() {
                 validation.set_audience(&[audience]);
             }
-            let decoded_token: TokenData<JWTClaims> =
-                decode::<JWTClaims>(token, &jwk.decoding_key, &validation)?;
-            Ok(Some(decoded_token.claims.sub))
+            let decoded_token = decode::<Value>(token, &jwk.decoding_key, &validation)?;
+            Ok(Some(AuthenticatedUser::from_jwt_claims(
+                decoded_token.claims,
+            )?))
         } else {
             Ok(None)
         }
@@ -226,11 +254,17 @@ impl AsyncAuthorizeRequest<axum::body::Body> for UserAuth {
     fn authorize(&mut self, mut request: hyper::Request<axum::body::Body>) -> Self::Future {
         let auth_methods = self.auth_methods.clone();
         Box::pin(async move {
-            let mut username: Option<String> = None;
+            let mut authenticated = false;
             for auth_method in auth_methods.iter() {
                 match auth_method.authorize_user(request.headers()) {
                     Ok(Some(user)) => {
-                        username = Some(user);
+                        request.extensions_mut().insert(UserId(user.username));
+                        if let Some(claims) = user.jwt_claims {
+                            request
+                                .extensions_mut()
+                                .insert(JwtAccessTokenClaims(claims));
+                        }
+                        authenticated = true;
                         break;
                     }
                     Err(e) => warn!("Error trying to authorize user: {e:?}"),
@@ -238,9 +272,7 @@ impl AsyncAuthorizeRequest<axum::body::Body> for UserAuth {
                 }
             }
 
-            if let Some(username) = username {
-                request.extensions_mut().insert(UserId(username));
-            } else {
+            if !authenticated {
                 return Err(StatusCode::UNAUTHORIZED.into_response());
             }
 
