@@ -21,17 +21,16 @@ http-body-util = "0.1"
 httparse = "1"
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
-jsonwebtoken = "10"
-jwks = "0.5"
+jsonwebtoken = "12"
 local-ip-address = "0.6"
 log = "0.4"
-minijinja = "2.23"
+minijinja = "3.1"
 reqwest = { version = "0.13", features = ["json"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
 rustls-pemfile = "2"
 rustls-pki-types = "1"
 sea-orm = { version = "2", features = ["sqlx-all", "sqlite-use-returning-for-3_35", "runtime-tokio-rustls"] }
-sea-orm-migration = { version = "2.0.1", features = ["runtime-tokio-rustls", "sqlx-postgres", "sqlx-mysql", "sqlx-sqlite"] }
+sea-orm-migration = { version = "2", features = ["runtime-tokio-rustls", "sqlx-postgres", "sqlx-mysql", "sqlx-sqlite"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
@@ -47,7 +46,7 @@ whoami = "2"
 migration = { path = "./migration" }
 
 [dev-dependencies]
-axum-test = "21.0.0"
+axum-test = "21.1.0"
 rcgen = "0.14"
 spark-plug-client = { path = "../clients/rust" }
 

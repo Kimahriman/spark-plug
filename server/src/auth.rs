@@ -4,9 +4,10 @@ use anyhow::Result;
 use axum::response::IntoResponse;
 use futures_util::future::BoxFuture;
 use http::{HeaderMap, Request, Response, StatusCode, header::AUTHORIZATION};
+use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
-use jwks::Jwks;
 use log::{info, warn};
+use serde::Deserialize;
 use serde_json::Value;
 use tower_http::auth::AsyncAuthorizeRequest;
 
@@ -156,27 +157,72 @@ impl UserAuthMethod for JWTAuth {
 }
 
 struct JWKSAuth {
-    jwks: Jwks,
+    keys: HashMap<String, DecodingKey>,
     audience: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct OidcDiscoveryDocument {
+    jwks_uri: String,
 }
 
 impl JWKSAuth {
     async fn create(options: &HashMap<String, String>) -> Self {
-        let jwks = match (options.get("jwks_url"), options.get("oidc_url")) {
-            (Some(_), Some(_)) => panic!("JWKS and OIDC URL cannot both be specified"),
-            (Some(jwks_url), None) => Jwks::from_jwks_url(jwks_url)
-                .await
-                .expect("Failed to load JWKS info from {jwks_url}"),
-            (None, Some(oidc_url)) => Jwks::from_oidc_url(oidc_url)
-                .await
-                .expect("Failed to load OIDC info from {oidc_url}"),
-            (None, None) => panic!("Either jwks_url or oidc_url must be provided"),
+        Self::load(options)
+            .await
+            .unwrap_or_else(|error| panic!("Failed to initialize JWKS authentication: {error:#}"))
+    }
+
+    async fn load(options: &HashMap<String, String>) -> Result<Self> {
+        let client = reqwest::Client::new();
+        let jwks_url = match (options.get("jwks_url"), options.get("oidc_url")) {
+            (Some(_), Some(_)) => anyhow::bail!("JWKS and OIDC URL cannot both be specified"),
+            (Some(jwks_url), None) => jwks_url.clone(),
+            (None, Some(oidc_url)) => {
+                validate_http_url(oidc_url)?;
+                let discovery = client
+                    .get(oidc_url)
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json::<OidcDiscoveryDocument>()
+                    .await?;
+                discovery.jwks_uri
+            }
+            (None, None) => anyhow::bail!("Either jwks_url or oidc_url must be provided"),
         };
+
+        validate_http_url(&jwks_url)?;
+        let jwks = client
+            .get(&jwks_url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<JwkSet>()
+            .await?;
+
+        let mut keys = HashMap::with_capacity(jwks.keys.len());
+        for jwk in jwks.keys {
+            let kid = jwk
+                .common
+                .key_id
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("JWKS contains a key without a kid"))?;
+            keys.insert(kid, DecodingKey::from_jwk(&jwk)?);
+        }
 
         let audience = options.get("audience").cloned();
 
-        Self { jwks, audience }
+        Ok(Self { keys, audience })
     }
+}
+
+fn validate_http_url(url: &str) -> Result<()> {
+    let url = reqwest::Url::parse(url)?;
+    if !matches!(url.scheme(), "http" | "https") {
+        anyhow::bail!("URL must use HTTP or HTTPS: {}", url.scheme());
+    }
+    Ok(())
 }
 
 impl UserAuthMethod for JWKSAuth {
@@ -190,8 +236,7 @@ impl UserAuthMethod for JWKSAuth {
                     "jwt header should have a kid".to_string(),
                 ))?;
 
-            let jwk = self
-                .jwks
+            let decoding_key = self
                 .keys
                 .get(kid)
                 .ok_or(crate::error::Error::Authorization(
@@ -202,7 +247,7 @@ impl UserAuthMethod for JWKSAuth {
             if let Some(audience) = self.audience.as_ref() {
                 validation.set_audience(&[audience]);
             }
-            let decoded_token = decode::<Value>(token, &jwk.decoding_key, &validation)?;
+            let decoded_token = decode::<Value>(token, decoding_key, &validation)?;
             Ok(Some(AuthenticatedUser::from_jwt_claims(
                 decoded_token.claims,
             )?))
