@@ -59,6 +59,10 @@
 #     jwks_url: http://localhost:8080/realms/test/.well-known/jwks.json
 #     audience: user
 
+# # Claim path containing roles for Spark versions with an allowed_roles list.
+# # Supports dotted paths (realm_access.roles) or JSON Pointer (/realm_access/roles).
+# # The claim can be a string or a string array.
+# roles_path: realm_access.roles
 
 # # A list of supported Spark versions that can be used. Users can select which version to use when
 # # creating an application, otherwise it defaults to the first in the list.
@@ -76,15 +80,12 @@
 #     # Optional fixed proxy user. When set, it takes precedence over proxy_user.
 #     proxy_user_name: spark-service-user
 #     # Optional role allowlist for creating applications with this Spark version.
-#     # Configure allowed_roles and roles_path together. Put jwt/jwks first in auth_methods
+#     # Set the global roles_path above to use this restriction. Put jwt/jwks first in auth_methods
 #     # when role authorization should use that token rather than another auth method.
 #     # Claims are read from the verified JWT selected by auth_methods.
 #     allowed_roles:
 #       - spark-user
 #       - spark-admin
-#     # Claim path containing roles; supports dotted paths (realm_access.roles)
-#     # or JSON Pointer (/realm_access/roles). The claim can be a string or string array.
-#     roles_path: realm_access.roles
 #     # Environment variables to set for launching purposes
 #     env:
 #       JAVA_HOME: /usr/lib/jvm/java-17-openjdk

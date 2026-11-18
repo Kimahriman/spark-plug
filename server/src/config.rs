@@ -21,9 +21,8 @@ pub struct SparkVersion {
     pub proxy_user: Option<bool>,
     // Optional fixed Spark proxy user. When set, this takes precedence over `proxy_user`.
     pub proxy_user_name: Option<String>,
-    // Spark versions can restrict application creation to JWT roles at this claim path.
+    // Spark versions can restrict application creation to JWT roles.
     pub allowed_roles: Option<Vec<String>>,
-    pub roles_path: Option<String>,
     pub env: Option<HashMap<String, String>>,
     pub default_configs: Option<HashMap<String, String>>,
     pub merge_configs: Option<HashMap<String, String>>,
@@ -65,6 +64,8 @@ pub struct ProxyConfig {
     pub plugin_path: Option<String>,
     pub launch_timeout: Option<u32>,
     pub session_timeout: Option<u32>,
+    // Claim path used to read roles for any version with `allowed_roles` configured.
+    pub roles_path: Option<String>,
     pub store: Option<String>,
     pub kerberos_config: Option<KerberosConfig>,
     pub tls: Option<TlsConfig>,

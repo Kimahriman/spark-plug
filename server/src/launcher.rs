@@ -102,13 +102,14 @@ impl SparkLauncher {
         assert!(!versions.is_empty(), "No Spark versions provided");
 
         // Check all the Spark directories exist
+        assert!(
+            config.roles_path.is_some()
+                || versions
+                    .iter()
+                    .all(|version| version.allowed_roles.is_none()),
+            "roles_path must be configured globally when any Spark version has allowed_roles configured"
+        );
         for version in versions.iter() {
-            assert_eq!(
-                version.allowed_roles.is_some(),
-                version.roles_path.is_some(),
-                "Both allowed_roles and roles_path must be configured together for Spark version {}",
-                version.name
-            );
             assert!(
                 std::path::Path::new(&version.home).exists(),
                 "Home directory not found for version {}: {}",

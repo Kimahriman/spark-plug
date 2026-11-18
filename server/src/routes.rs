@@ -106,7 +106,11 @@ async fn create_app<L: Launcher>(
         .ok_or(StatusCode::BAD_REQUEST)?;
 
     let claims = access_token_claims.map(|Extension(claims)| claims);
-    if !version_allows_roles(&version, claims.as_ref()) {
+    if !version_allows_roles(
+        &version,
+        state.config.roles_path.as_deref(),
+        claims.as_ref(),
+    ) {
         return Err(StatusCode::FORBIDDEN);
     }
 
@@ -197,11 +201,15 @@ async fn create_app<L: Launcher>(
     Ok(Json(info))
 }
 
-fn version_allows_roles(version: &SparkVersion, claims: Option<&JwtAccessTokenClaims>) -> bool {
+fn version_allows_roles(
+    version: &SparkVersion,
+    roles_path: Option<&str>,
+    claims: Option<&JwtAccessTokenClaims>,
+) -> bool {
     let Some(allowed_roles) = version.allowed_roles.as_deref() else {
         return true;
     };
-    let Some(role_path) = version.roles_path.as_deref() else {
+    let Some(role_path) = roles_path else {
         return false;
     };
     let Some(claims) = claims else {
@@ -492,11 +500,14 @@ mod test {
         let version = SparkVersion {
             name: "restricted".to_string(),
             allowed_roles: Some(vec!["spark-admin".to_string()]),
-            roles_path: Some("realm_access.roles".to_string()),
             ..Default::default()
         };
         let token_claims = JwtAccessTokenClaims(claims);
-        assert!(version_allows_roles(&version, Some(&token_claims)));
+        assert!(version_allows_roles(
+            &version,
+            Some("realm_access.roles"),
+            Some(&token_claims)
+        ));
     }
 
     #[tokio::test]

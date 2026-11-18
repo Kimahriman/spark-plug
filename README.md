@@ -53,13 +53,14 @@ Supported authentication methods are:
 - `jwt` - JWT provided in header and verified with local copy of public certificate that signed the JWT
 - `jwks` - JWT provided in header and verified through external JWKS or OIDC url endpoint.
 
-Spark versions can optionally set `allowed_roles` and `roles_path` to restrict who can create sessions
-with that version. The request must authenticate through `jwt` or `jwks`, and the verified access token
-must contain one of the allowed roles at the configured dotted claim path (for example,
-`realm_access.roles`) or JSON Pointer (for example, `/realm_access/roles`). Role claims may be a string
-or an array of strings. Configure both role settings together; the JWT/JWKS method must be the first
-configured method that authenticates the request. A version can also set `proxy_user_name` to always
-launch as a fixed Spark proxy user; this overrides `proxy_user: true`, which otherwise uses the authenticated username.
+Spark versions can optionally set `allowed_roles` to restrict who can create sessions with that version.
+Configure the global `roles_path` to select the claim path used for all version allowlists. It accepts
+a dotted path (for example, `realm_access.roles`) or JSON Pointer (for example, `/realm_access/roles`);
+role claims may be a string or an array of strings. Restricted requests must authenticate through
+`jwt` or `jwks`, and the verified access token must contain one of that version's allowed roles. The
+JWT/JWKS method must be the first configured method that authenticates the request. A version can also
+set `proxy_user_name` to always launch as a fixed Spark proxy user; this overrides `proxy_user: true`,
+which otherwise uses the authenticated username.
 
 #### Configuring the server
 A full list of possible configs for the server are listed in the example [config.yaml](./conf/config.yaml).
