@@ -53,8 +53,8 @@ Supported authentication methods are:
 - `jwt` - JWT provided in header and verified with local copy of public certificate that signed the JWT
 - `jwks` - JWT provided in header and verified through external JWKS or OIDC url endpoint.
 
-Spark versions can optionally set `allowed_roles` to restrict who can create sessions with that version.
-Configure the global `roles_path` to select the claim path used for all version allowlists. It accepts
+Spark versions can optionally set `allowed_roles` to restrict who can see and create sessions with that
+version. Configure the global `roles_path` to select the claim path used for all version allowlists. It accepts
 a dotted path (for example, `realm_access.roles`) or JSON Pointer (for example, `/realm_access/roles`);
 role claims may be a string or an array of strings. Restricted requests must authenticate through
 `jwt` or `jwks`, and the verified access token must contain one of that version's allowed roles. The

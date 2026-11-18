@@ -31,7 +31,7 @@ Authenticated HTTP/2 proxy for Apache Spark Connect. Provides session management
 - `POST /apps` → Create session (returns {id, token})
 - `GET /apps` → List user's sessions
 - `DELETE /apps/{id}` → Kill session
-- `GET /versions` → List available Spark versions
+- `GET /versions` → List Spark versions available to the authenticated user
 - `POST /callback` → Driver registration (token-authenticated)
 - `DELETE /callback` → Driver shutdown notification
 
@@ -116,13 +116,16 @@ tls:
   key: /path/to/key.pem
 
 auth_methods:
-  - name: remote_user
-    options:
-      header: X-Remote-User
   - name: jwks
     options:
       oidc_url: https://oidc.example.com/.well-known/openid-configuration
       audience: spark-plug
+  - name: remote_user
+    options:
+      header: X-Remote-User
+
+# JWT claim path used by all per-version role allowlists
+roles_path: realm_access.roles
 
 spark_versions:
   - name: "4.0.0"
@@ -130,6 +133,10 @@ spark_versions:
     master: yarn
     deploy_mode: cluster
     proxy_user: true
+    # Strictly gates access to this version: only matching users can list or create it.
+    allowed_roles:
+      - spark-user
+      - spark-admin
     env:
       JAVA_HOME: /usr/lib/jvm/java-17-openjdk
     default_configs:
@@ -153,6 +160,11 @@ kerberos_config:
 2. **JWTAuth**: Verify Bearer token signature (RSA/EC local key) → Extract subject
 3. **JWKSAuth**: Verify Bearer token via remote JWKS/OIDC → Validate audience → Extract subject
 4. **CurrentUserAuth**: Use system `whoami` (dev only)
+
+**Spark Version Role Access:**
+- `roles_path` is a global claim path shared by all Spark versions.
+- A version's optional `allowed_roles` list strictly controls access to that version: users without a matching verified JWT/JWKS role do not see it in `GET /versions`, and `POST /apps` rejects requests to create it.
+- Put JWT/JWKS authentication before fallback methods such as `remote_user` when role checks are required, so the verified token claims are available to the request.
 
 **Token Auth (Callbacks):**
 - Callbacks must include `Authorization: Bearer {token}` header

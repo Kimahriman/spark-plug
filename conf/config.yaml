@@ -79,7 +79,7 @@
 #     proxy_user: true
 #     # Optional fixed proxy user. When set, it takes precedence over proxy_user.
 #     proxy_user_name: spark-service-user
-#     # Optional role allowlist for creating applications with this Spark version.
+#     # Optional role allowlist for listing and creating applications with this Spark version.
 #     # Set the global roles_path above to use this restriction. Put jwt/jwks first in auth_methods
 #     # when role authorization should use that token rather than another auth method.
 #     # Claims are read from the verified JWT selected by auth_methods.

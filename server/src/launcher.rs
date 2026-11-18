@@ -43,8 +43,7 @@ static PLUGIN_BINARY: Option<&[u8]> = None;
 #[allow(clippy::double_must_use)]
 #[async_trait::async_trait]
 pub trait Launcher: Clone + Send + Sync {
-    fn get_versions(&self) -> Vec<String>;
-    fn resolve_version(&self, version_name: Option<&str>) -> Option<SparkVersion>;
+    fn get_versions(&self) -> Vec<SparkVersion>;
 
     #[allow(clippy::too_many_arguments)]
     async fn launch(
@@ -443,19 +442,8 @@ impl SparkLauncher {
 
 #[async_trait::async_trait]
 impl Launcher for SparkLauncher {
-    fn get_versions(&self) -> Vec<String> {
-        self.versions.iter().map(|v| v.name.clone()).collect()
-    }
-
-    fn resolve_version(&self, version_name: Option<&str>) -> Option<SparkVersion> {
-        match version_name {
-            Some(name) => self
-                .versions
-                .iter()
-                .find(|version| version.name == name)
-                .cloned(),
-            None => self.versions.first().cloned(),
-        }
+    fn get_versions(&self) -> Vec<SparkVersion> {
+        self.versions.clone()
     }
 
     async fn launch(

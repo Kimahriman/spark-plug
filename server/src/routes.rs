@@ -100,10 +100,12 @@ async fn create_app<L: Launcher>(
     access_token_claims: Option<Extension<JwtAccessTokenClaims>>,
     Json(params): Json<CreateApplicationRequest>,
 ) -> Result<Json<ApplicationInfo>, StatusCode> {
-    let version = state
-        .launcher
-        .resolve_version(params.version.as_deref())
-        .ok_or(StatusCode::BAD_REQUEST)?;
+    let versions = state.launcher.get_versions();
+    let version = match params.version.as_deref() {
+        Some(name) => versions.into_iter().find(|version| version.name == name),
+        None => versions.into_iter().next(),
+    }
+    .ok_or(StatusCode::BAD_REQUEST)?;
 
     let claims = access_token_claims.map(|Extension(claims)| claims);
     if !version_allows_roles(
@@ -374,8 +376,22 @@ async fn delete_app<L: Launcher>(
     Ok(())
 }
 
-async fn list_versions<L: Launcher>(State(state): State<AppStateDyn<L>>) -> Json<Vec<String>> {
-    Json(state.launcher.get_versions())
+async fn list_versions<L: Launcher>(
+    State(state): State<AppStateDyn<L>>,
+    access_token_claims: Option<Extension<JwtAccessTokenClaims>>,
+) -> Json<Vec<String>> {
+    let claims = access_token_claims.map(|Extension(claims)| claims);
+    let versions = state
+        .launcher
+        .get_versions()
+        .into_iter()
+        .filter(|version| {
+            version_allows_roles(version, state.config.roles_path.as_deref(), claims.as_ref())
+        })
+        .map(|version| version.name)
+        .collect();
+
+    Json(versions)
 }
 
 #[derive(Serialize, Deserialize)]

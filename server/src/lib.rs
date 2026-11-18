@@ -413,18 +413,11 @@ pub(crate) mod test_utils {
 
     #[async_trait::async_trait]
     impl Launcher for MockLauncher {
-        fn get_versions(&self) -> Vec<String> {
-            vec!["4.0.0".to_string()]
-        }
-
-        fn resolve_version(&self, version_name: Option<&str>) -> Option<SparkVersion> {
-            match version_name {
-                Some("4.0.0") | None => Some(SparkVersion {
-                    name: "4.0.0".to_string(),
-                    ..Default::default()
-                }),
-                Some(_) => None,
-            }
+        fn get_versions(&self) -> Vec<SparkVersion> {
+            vec![SparkVersion {
+                name: "4.0.0".to_string(),
+                ..Default::default()
+            }]
         }
 
         async fn launch(
