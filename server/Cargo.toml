@@ -1,6 +1,6 @@
 [package]
 name = "spark-plug"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -21,7 +21,7 @@ http-body-util = "0.1"
 httparse = "1"
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
-jsonwebtoken = "12"
+jsonwebtoken = { version = "12", features = ["rust_crypto"] }
 local-ip-address = "0.6"
 log = "0.4"
 minijinja = "3.1"
